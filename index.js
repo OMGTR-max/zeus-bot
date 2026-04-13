@@ -32,13 +32,13 @@ const CONFIG = {
 
 // ─── TRIVIA QUESTIONS ────────────────────────────────────────────────────────
 const triviaQuestions = [
-  { q: "What faction must you join to participate in Shadow War?", a: "shadows" },
+  { q: "Who is the Zeus member that has reptile pets?", a: "Pandapple" },
   { q: "What day does Rite of Exile take place?", a: "sunday" },
   { q: "How many members minimum does a clan need to sign up for Shadow War?", a: "30" },
-  { q: "What time does Shadow War start on the Zeus clan server (PHT)?", a: "7:30 pm" },
+  { q: "What is the favorite drink of NaliBullet?", a: "Redhorse" },
   { q: "What item do you need to gift someone to invite them to the Shadows?", a: "akeba's signet" },
-  { q: "What are the two types of battles in Shadow War?", a: "main and support" },
-  { q: "What is the max team size in Shadow War?", a: "90" },
+  { q: "Who is the best Pokemon?", a: "Pikachu" },
+  { q: "What is the max team size in Shadow War?", a: "96" },
   { q: "Which NPC do you visit to try the Shadows lottery in Westmarch?", a: "mysterious patron" },
   { q: "What legendary item can you earn by winning Shadow War matches?", a: "legendary crest" },
   { q: "What level do you need to reach to join the Shadows faction?", a: "43" },
@@ -65,8 +65,11 @@ function zeusEmbed(title, description, color = 0xFFD700) {
 
 // ─── HELPER: Get Shadow War role mention ─────────────────────────────────────
 function getShadowWarMention(guild) {
-  const role = guild.roles.cache.find(r => r.name.toLowerCase().includes('shadow war'));
-  return role ? `<@&${role.id}>` : '@everyone';
+ // Replace these numbers with your actual Role IDs from Discord
+  const role1 = '1492377915839742043'; // ID for 'shadow war'
+  const role2 = '1492380088103211159'; // ID for 'shadow war core'
+
+  return `<@&${role1}> <@&${role2}>`;
 }
 
 // ─── READY ────────────────────────────────────────────────────────────────────
@@ -88,7 +91,7 @@ client.on('guildMemberAdd', member => {
     `⚡ Hail, **${member.user.username}**! You have entered the realm of Zeus.\n\n` +
     `🔱 We are a **Diablo Immortal** clan on the **SEA Bloodraven** server.\n\n` +
     `**Getting Started:**\n` +
-    `• Check <#rules> for clan rules\n` +
+    `• Check <#clan-rules> for clan rules\n` +
     `• Assign yourself roles with \`$roles\`\n` +
     `• Type \`$help\` to see all bot commands\n` +
     `• Join us for **Shadow War** every 🗓️ **Thursday & Saturday at 7:30 PM PHT**\n\n` +
