@@ -19,7 +19,7 @@ const CONFIG = {
   announcementChannelName: 'clan-announcements',
   shadowWarChannelName:    'shadow-war-alerts',
   welcomeChannelName:      'welcome',
-  modLogChannelName:       'mod-log',
+  modLogChannelName:       'moderator-only',
 };
 
 // ─── PATCH TRACKER STATE ──────────────────────────────────────────────────────
@@ -27,13 +27,13 @@ let lastSeenPatchTitle = null;
 
 // ─── TRIVIA ───────────────────────────────────────────────────────────────────
 const triviaQuestions = [
-  { q: "What faction must you join to participate in Shadow War?", a: "shadows" },
+  { q: "What is the favorite drink of NaliBullet?", a: "Redhorse" },
   { q: "What day does Rite of Exile take place?", a: "sunday" },
   { q: "How many members minimum does a clan need to sign up for Shadow War?", a: "30" },
-  { q: "What time does Shadow War start on Zeus server (PHT)?", a: "7:30 pm" },
+  { q: "Who is the best Pokemon?", a: "Pikachu" },
   { q: "What item do you need to invite someone to the Shadows?", a: "akeba's signet" },
-  { q: "What are the two types of battles in Shadow War?", a: "main and support" },
-  { q: "What is the max team size in Shadow War?", a: "90" },
+  { q: "Who is the Zeus member who has reptile pets?", a: "Pandapple" },
+  { q: "What is the max team size in Shadow War?", a: "96" },
   { q: "Which NPC do you visit for the Shadows lottery in Westmarch?", a: "mysterious patron" },
   { q: "What legendary item can you earn by winning Shadow War?", a: "legendary crest" },
   { q: "What level do you need to join the Shadows faction?", a: "43" },
