@@ -1,0 +1,22 @@
+{
+  "name": "zeus-bot",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@discordjs/voice": "^0.19.2",
+    "discord.js": "^14.26.2",
+    "dotenv": "^17.4.2",
+    "moment-timezone": "^0.6.1",
+    "node-cron": "^4.2.1",
+    "play-dl": "^1.9.7",
+    "sodium-native": "^5.1.0",
+    "ytdl-core": "^4.11.5"
+  }
+}
