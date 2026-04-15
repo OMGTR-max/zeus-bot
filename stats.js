@@ -7,7 +7,7 @@ const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, Events } = r
 const { google } = require('googleapis');
 
 // ─── SHEET CONFIG ─────────────────────────────────────────────────────────────
-const SHEET_ID   = '1qa7hwxIj6hbgQ_j1x8ygwqAQ-V4FhXicP4EVLVSfeKg';
+const SHEET_ID   = '1nZz5j4b_g0kihZDFINmUOeK_i1Sb15AwyOAC3MmHR60';
 const SHEET_TAB  = 'Zeus';
 const DATA_RANGE = `${SHEET_TAB}!A:K`; // now includes LastUpdated in K
 
