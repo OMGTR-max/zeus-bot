@@ -200,6 +200,10 @@ async function sendRoleDM(member) {
 
 // ─── BUTTON HANDLER ───────────────────────────────────────────────────────────
 client.on(Events.InteractionCreate, async interaction => {
+  // ── Roster pagination buttons ─────────────────────────────────────────────
+  if (await stats.handleRosterButton(interaction)) return;
+
+  // ── Role assignment buttons ───────────────────────────────────────────────
   if (!interaction.isButton()) return;
   const { customId, user } = interaction;
   if (!customId.startsWith('role_')) return;
@@ -547,6 +551,13 @@ client.on('messageCreate', async message => {
   const args    = message.content.slice(PREFIX.length).trim().split(/ +/);
   const command = args.shift().toLowerCase();
 
+  // ── $getstats @user (officer lookup) ─────────────────────────────────────
+  if (command === 'getstats') {
+    const target = message.mentions.members.first();
+    if (!target) return message.reply('❌ Usage: `$getstats @user`');
+    return stats.getOtherStats(message, target);
+  }
+
   // ── $updatestats ──────────────────────────────────────────────────────────
   if (command === 'updatestats') {
     await message.reply('📬 Check your DMs! I\'m sending you the stat update form now. ⚡');
@@ -571,7 +582,8 @@ client.on('messageCreate', async message => {
       `**📊 Clan Stats**\n` +
       `\`$updatestats\` — Update your stats via DM form\n` +
       `\`$mystats\` — View your current stats\n` +
-      `\`$roster\` — View full clan roster (sorted by Resonance)\n` +
+      `\`$getstats @user\` — View another member's stats (officers)\n` +
+      `\`$roster\` — Full clan roster with pagination\n` +
       `\`$roster [class]\` — Filter roster by class\n\n` +
       `\`$war\` — Countdown to next war\n` +
       `\`$schedule\` — Full weekly schedule\n` +
