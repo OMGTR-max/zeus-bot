@@ -10,6 +10,7 @@ const cron   = require('node-cron');
 const moment = require('moment-timezone');
 const axios  = require('axios');
 const cheerio = require('cheerio');
+const stats  = require('./stats');
 
 const TIMEZONE = 'Asia/Manila';
 const PREFIX   = '$';
@@ -19,7 +20,16 @@ const CONFIG = {
   announcementChannelName: 'clan-announcements',
   shadowWarChannelName:    'shadow-war-alerts',
   welcomeChannelName:      'welcome',
-  modLogChannelName:       'moderator-only',
+  modLogChannelName:       'mod-log',
+};
+
+// ─── ROLE IDs (hardcoded from your Discord server) ───────────────────────────
+// These are faster and more reliable than searching by name.
+// To find a Role ID: Server Settings → Roles → right-click role → Copy ID
+const ROLE_IDS = {
+  shadowWar:     '1492377915839742043', // @shadow war
+  shadowWarCore: '1492380088103211159', // @shadow war core
+  stronkpeople:  '',                    // ← paste your @stronkpeople Role ID here
 };
 
 // ─── PATCH TRACKER STATE ──────────────────────────────────────────────────────
@@ -27,13 +37,13 @@ let lastSeenPatchTitle = null;
 
 // ─── TRIVIA ───────────────────────────────────────────────────────────────────
 const triviaQuestions = [
-  { q: "What is the favorite drink of NaliBullet?", a: "Redhorse" },
+  { q: "What faction must you join to participate in Shadow War?", a: "shadows" },
   { q: "What day does Rite of Exile take place?", a: "sunday" },
   { q: "How many members minimum does a clan need to sign up for Shadow War?", a: "30" },
-  { q: "Who is the best Pokemon?", a: "Pikachu" },
+  { q: "What time does Shadow War start on Zeus server (PHT)?", a: "7:30 pm" },
   { q: "What item do you need to invite someone to the Shadows?", a: "akeba's signet" },
-  { q: "Who is the Zeus member who has reptile pets?", a: "Pandapple" },
-  { q: "What is the max team size in Shadow War?", a: "96" },
+  { q: "What are the two types of battles in Shadow War?", a: "main and support" },
+  { q: "What is the max team size in Shadow War?", a: "90" },
   { q: "Which NPC do you visit for the Shadows lottery in Westmarch?", a: "mysterious patron" },
   { q: "What legendary item can you earn by winning Shadow War?", a: "legendary crest" },
   { q: "What level do you need to join the Shadows faction?", a: "43" },
@@ -73,20 +83,27 @@ function getRole(guild, name) {
   return guild.roles.cache.find(r => r.name.toLowerCase() === name.toLowerCase());
 }
 
+// ─── ROLE MENTION HELPERS (uses hardcoded IDs for reliability) ───────────────
+
 // Ping both @shadow war core + @shadow war
 function getAllWarMention(guild) {
-  const core    = getRole(guild, 'shadow war core');
-  const regular = getRole(guild, 'shadow war');
-  const parts   = [];
-  if (core)    parts.push(`<@&${core.id}>`);
-  if (regular) parts.push(`<@&${regular.id}>`);
+  const parts = [];
+  if (ROLE_IDS.shadowWarCore) parts.push(`<@&${ROLE_IDS.shadowWarCore}>`);
+  if (ROLE_IDS.shadowWar)     parts.push(`<@&${ROLE_IDS.shadowWar}>`);
   return parts.join(' ') || '@everyone';
 }
 
-// Ping @shadow war core only
+// Ping @shadow war core only (exclusive early alert)
 function getCoreMention(guild) {
-  const core = getRole(guild, 'shadow war core');
-  return core ? `<@&${core.id}>` : null;
+  return ROLE_IDS.shadowWarCore ? `<@&${ROLE_IDS.shadowWarCore}>` : null;
+}
+
+// Ping @stronkpeople (used for patch announcements)
+function getStronkMention(guild) {
+  if (ROLE_IDS.stronkpeople) return `<@&${ROLE_IDS.stronkpeople}>`;
+  // Fallback to name-based search if ID not set yet
+  const role = getRole(guild, 'stronkpeople');
+  return role ? `<@&${role.id}>` : '@everyone';
 }
 
 // ─── WELCOME BANNER ───────────────────────────────────────────────────────────
@@ -197,9 +214,9 @@ client.on(Events.InteractionCreate, async interaction => {
   }
 
   const roleMap = {
-    role_stronkpeople:      'stronkpeople',
-    role_shadow_war:        'shadow war',
-    role_shadow_war_core:   'shadow war core',
+    role_stronkpeople:      { name: 'stronkpeople',      id: ROLE_IDS.stronkpeople   || null },
+    role_shadow_war:        { name: 'shadow war',         id: ROLE_IDS.shadowWar      || null },
+    role_shadow_war_core:   { name: 'shadow war core',    id: ROLE_IDS.shadowWarCore  || null },
   };
   const emojiMap = {
     role_stronkpeople:     '🔱',
@@ -207,13 +224,21 @@ client.on(Events.InteractionCreate, async interaction => {
     role_shadow_war_core:  '🔥',
   };
 
-  const roleName  = roleMap[customId];
+  const roleInfo  = roleMap[customId];
   const roleEmoji = emojiMap[customId];
-  const role      = getRole(member.guild, roleName);
+
+  // Use ID if available, fallback to name search
+  let role = null;
+  if (roleInfo.id) {
+    role = member.guild.roles.cache.get(roleInfo.id);
+  }
+  if (!role) {
+    role = getRole(member.guild, roleInfo.name);
+  }
 
   if (!role) {
     return interaction.reply({
-      content: `❌ The role **${roleName}** doesn't exist on the server yet! Ask an admin to create it first.`,
+      content: `❌ The role **${roleInfo.name}** doesn't exist on the server yet! Ask an admin to create it first.`,
       ephemeral: true,
     });
   }
@@ -298,8 +323,7 @@ async function checkForNewPatch(guild) {
     if (!channel) return;
 
     const isPatch = /patch|update|hotfix|fix|maintenance|balance|season/i.test(latestTitle);
-    const stronkRole = getRole(guild, 'stronkpeople');
-    const mention = stronkRole ? `<@&${stronkRole.id}>` : '@everyone';
+    const stronkRole = getStronkMention(guild);
 
     const embed = new EmbedBuilder()
       .setColor(isPatch ? 0xFF4500 : 0x00BFFF)
@@ -317,7 +341,7 @@ async function checkForNewPatch(guild) {
       .setFooter({ text: 'Zeus Clan Patch Tracker | Auto-monitored via Blizzard News' })
       .setTimestamp();
 
-    await channel.send({ content: mention, embeds: [embed] });
+    await channel.send({ content: stronkRole, embeds: [embed] });
   } catch (err) {
     console.log('Patch check error (will retry next cycle):', err.message);
   }
@@ -496,7 +520,15 @@ function sendFinalCall(guild) {
   ]});
 }
 
-// ─── COMMANDS ─────────────────────────────────────────────────────────────────
+// ─── DM HANDLER — intercepts stat form responses ──────────────────────────────
+client.on('messageCreate', async message => {
+  if (message.author.bot) return;
+  // Only handle DMs for stat sessions
+  if (message.channel.type === 1) { // 1 = DM channel
+    await stats.handleStatDMResponse(message);
+    return;
+  }
+});
 client.on('messageCreate', async message => {
   if (message.author.bot) return;
 
@@ -515,10 +547,32 @@ client.on('messageCreate', async message => {
   const args    = message.content.slice(PREFIX.length).trim().split(/ +/);
   const command = args.shift().toLowerCase();
 
+  // ── $updatestats ──────────────────────────────────────────────────────────
+  if (command === 'updatestats') {
+    await message.reply('📬 Check your DMs! I\'m sending you the stat update form now. ⚡');
+    await stats.startStatForm(message.member, message.channel);
+    return;
+  }
+
+  // ── $mystats ──────────────────────────────────────────────────────────────
+  if (command === 'mystats') {
+    return stats.showMyStats(message);
+  }
+
+  // ── $roster ───────────────────────────────────────────────────────────────
+  if (command === 'roster') {
+    const filterClass = args[0] || null;
+    return stats.showRoster(message, filterClass);
+  }
+
   // ── $help ────────────────────────────────────────────────────────────────
   if (command === 'help') {
     return message.reply({ embeds: [zeusEmbed('Zeus Bot v2.0 Commands',
-      `**⚔️ Shadow War**\n` +
+      `**📊 Clan Stats**\n` +
+      `\`$updatestats\` — Update your stats via DM form\n` +
+      `\`$mystats\` — View your current stats\n` +
+      `\`$roster\` — View full clan roster (sorted by Resonance)\n` +
+      `\`$roster [class]\` — Filter roster by class\n\n` +
       `\`$war\` — Countdown to next war\n` +
       `\`$schedule\` — Full weekly schedule\n` +
       `\`$signup\` — How to sign up\n\n` +
