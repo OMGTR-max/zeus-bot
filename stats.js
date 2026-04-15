@@ -7,7 +7,7 @@ const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, Events } = r
 const { google } = require('googleapis');
 
 // ─── SHEET CONFIG ─────────────────────────────────────────────────────────────
-const SHEET_ID   = '1nZz5j4b_g0kihZDFINmUOeK_i1Sb15AwyOAC3MmHR60';
+const SHEET_ID   = '1qa7hwxIj6hbgQ_j1x8ygwqAQ-V4FhXicP4EVLVSfeKg';
 const SHEET_TAB  = 'Zeus';
 const DATA_RANGE = `${SHEET_TAB}!A:K`; // now includes LastUpdated in K
 
@@ -16,13 +16,13 @@ const COL = {
   NAME:        2,  // B
   CLASS:       3,  // C
   RESONANCE:   4,  // D
-  CR:          5,  // E
-  ARMOR:       6,  // F
-  ARMOR_PEN:   7,  // G
-  POTENCY:     8,  // H
-  RESISTANCE:  9,  // I
+  ARMOR:       5,  // E
+  ARMOR_PEN:   6,  // F
+  POTENCY:     7,  // G
+  RESISTANCE:  8,  // H
+  CR:          9,  // I
   DISCORD_ID:  10, // J
-  LAST_UPDATED:11, // K ← new: timestamp of last stat update
+  LAST_UPDATED:11, // K ← timestamp of last stat update
 };
 
 const PAGE_SIZE      = 15;  // members per roster page
@@ -281,14 +281,14 @@ async function updateRow(sheets, rowIndex, displayName, userId, data) {
     valueInputOption: 'USER_ENTERED',
     requestBody: {
       values: [[
-        displayName,     // B
+        displayName,     // B — Name
         data.class,      // C
         data.resonance,  // D
-        data.cr,         // E
-        data.armor,      // F
-        data.armorPen,   // G
-        data.potency,    // H
-        data.resistance, // I
+        data.armor,      // E
+        data.armorPen,   // F
+        data.potency,    // G
+        data.resistance, // H
+        data.cr,         // I ← CR now here
         userId,          // J
         now,             // K — LastUpdated
       ]],
@@ -312,11 +312,11 @@ async function addRow(sheets, rows, displayName, userId, data) {
         displayName,     // B
         data.class,      // C
         data.resonance,  // D
-        data.cr,         // E
-        data.armor,      // F
-        data.armorPen,   // G
-        data.potency,    // H
-        data.resistance, // I
+        data.armor,      // E
+        data.armorPen,   // F
+        data.potency,    // G
+        data.resistance, // H
+        data.cr,         // I ← CR now here
         userId,          // J
         now,             // K
       ]],
