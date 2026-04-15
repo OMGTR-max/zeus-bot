@@ -1,6 +1,6 @@
-// ⚡ ZEUS BOT v2.0 — Clan Bot for Diablo Immortal | Zeus Clan
+// ⚡ ZEUS BOT v3.0 — Clan Bot for Diablo Immortal | Zeus Clan
 // Server: SEA Bloodraven | Timezone: Asia/Manila | Prefix: $
-// NEW in v2: Patch Tracker | Role DM Menu | Tiered Shadow War Pings | Welcome Banner
+// NEW in v3: RSS-based Patch Tracker (always includes direct link) | Persistent patch cache
 
 const {
   Client, GatewayIntentBits, EmbedBuilder, PermissionFlagsBits,
@@ -10,6 +10,8 @@ const cron   = require('node-cron');
 const moment = require('moment-timezone');
 const axios  = require('axios');
 const cheerio = require('cheerio');
+const fs     = require('fs');
+const path   = require('path');
 const stats  = require('./stats');
 
 const TIMEZONE = 'Asia/Manila';
@@ -33,7 +35,36 @@ const ROLE_IDS = {
 };
 
 // ─── PATCH TRACKER STATE ──────────────────────────────────────────────────────
-let lastSeenPatchTitle = null;
+// Persists to disk so the bot doesn't re-announce the same patch after a restart
+const PATCH_CACHE_FILE = path.join(__dirname, '.patch_cache.json');
+
+function loadPatchCache() {
+  try {
+    if (fs.existsSync(PATCH_CACHE_FILE)) {
+      return JSON.parse(fs.readFileSync(PATCH_CACHE_FILE, 'utf8'));
+    }
+  } catch {}
+  return { lastHash: null, lastTitle: null };
+}
+
+function savePatchCache(hash, title) {
+  try {
+    fs.writeFileSync(PATCH_CACHE_FILE, JSON.stringify({ lastHash: hash, lastTitle: title }, null, 2));
+  } catch (e) {
+    console.log('[PatchTracker] Could not save cache:', e.message);
+  }
+}
+
+function hashString(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) {
+    h = (Math.imul(31, h) + str.charCodeAt(i)) | 0;
+  }
+  return h.toString(16);
+}
+
+// Patterns that identify a post as a patch/update (not just general news)
+const PATCH_PATTERNS = /patch\s*notes?|hotfix|bug\s*fix(es)?|balance\s*chang|content\s*update|game\s*update/i;
 
 // ─── TRIVIA ───────────────────────────────────────────────────────────────────
 const triviaQuestions = [
@@ -285,77 +316,113 @@ client.on('guildMemberAdd', async member => {
 });
 
 // ─── PATCH TRACKER ────────────────────────────────────────────────────────────
+// Uses the official Blizzard RSS feed — reliable, always has the direct link,
+// no JavaScript rendering issues. Cheerio parses the XML just like HTML.
+
+const DI_RSS_URL = 'https://news.blizzard.com/en-us/feed/diablo-immortal';
+
 async function checkForNewPatch(guild) {
   try {
-    // Try Blizzard news page
-    const urls = [
-      'https://diabloimmortal.blizzard.com/en-us/news',
-      'https://news.blizzard.com/en-us/diablo-immortal',
-    ];
+    // ── 1. Fetch the RSS feed ──────────────────────────────────────────────
+    const { data } = await axios.get(DI_RSS_URL, {
+      timeout: 15000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; ZeusBot/3.0)',
+        'Accept':     'application/rss+xml, application/xml, text/xml',
+      },
+    });
 
-    let latestTitle = null;
-    let latestLink  = null;
+    // ── 2. Parse RSS XML with cheerio ─────────────────────────────────────
+    const $ = cheerio.load(data, { xmlMode: true });
+    const items = $('item');
 
-    for (const url of urls) {
-      try {
-        const { data } = await axios.get(url, {
-          timeout: 12000,
-          headers: { 'User-Agent': 'Mozilla/5.0 (compatible; ZeusBot/2.0)' },
-        });
-        const $ = cheerio.load(data);
-
-        // Try various heading selectors Blizzard uses
-        const selectors = ['h3', 'h2', '.ArticleListItem-title', '.news-title', '[class*="title"]'];
-        for (const sel of selectors) {
-          const el = $(sel).first();
-          if (el.length && el.text().trim().length > 5) {
-            latestTitle = el.text().trim();
-            const href = el.closest('a').attr('href') || $('a').filter((i, a) => $(a).text().includes(latestTitle.slice(0, 20))).first().attr('href');
-            if (href) latestLink = href.startsWith('http') ? href : `https://diabloimmortal.blizzard.com${href}`;
-            break;
-          }
-        }
-        if (latestTitle) break;
-      } catch { continue; }
+    if (!items.length) {
+      console.log('[PatchTracker] RSS feed returned no items.');
+      return;
     }
 
-    if (!latestTitle || latestTitle === lastSeenPatchTitle) return;
-    lastSeenPatchTitle = latestTitle;
-    console.log(`🎮 New DI content detected: ${latestTitle}`);
+    // ── 3. Find the first item that looks like a patch/update ─────────────
+    let patchItem = null;
+    items.each((i, el) => {
+      const title = $(el).find('title').first().text().trim();
+      if (!patchItem && PATCH_PATTERNS.test(title)) {
+        patchItem = {
+          title:     title,
+          link:      $(el).find('link').first().text().trim() || $(el).find('guid').first().text().trim(),
+          pubDate:   $(el).find('pubDate').first().text().trim(),
+          summary:   $(el).find('description').first().text().replace(/<[^>]+>/g, '').trim().slice(0, 200),
+        };
+      }
+    });
 
-    const channel = getChannel(guild, CONFIG.announcementChannelName);
+    // If no patch-specific post, fall back to the most recent item
+    if (!patchItem) {
+      const first = items.first();
+      patchItem = {
+        title:   $(first).find('title').first().text().trim(),
+        link:    $(first).find('link').first().text().trim() || $(first).find('guid').first().text().trim(),
+        pubDate: $(first).find('pubDate').first().text().trim(),
+        summary: $(first).find('description').first().text().replace(/<[^>]+>/g, '').trim().slice(0, 200),
+        isFallback: true,
+      };
+    }
+
+    if (!patchItem.title) return;
+
+    // ── 4. Dedup — skip if we've already announced this one ───────────────
+    const cache     = loadPatchCache();
+    const entryHash = hashString(patchItem.title + patchItem.link);
+    if (cache.lastHash === entryHash) return; // already announced
+
+    savePatchCache(entryHash, patchItem.title);
+    console.log(`[PatchTracker] New DI post detected: ${patchItem.title}`);
+
+    // ── 5. Build and send the Discord embed ───────────────────────────────
+    const channel    = getChannel(guild, CONFIG.announcementChannelName);
     if (!channel) return;
 
-    const isPatch = /patch|update|hotfix|fix|maintenance|balance|season/i.test(latestTitle);
+    const isPatch    = PATCH_PATTERNS.test(patchItem.title);
     const stronkRole = getStronkMention(guild);
+
+    // Format the pub date if available
+    let dateStr = '';
+    if (patchItem.pubDate) {
+      try {
+        dateStr = `\n📅 **Posted:** ${moment(patchItem.pubDate).tz(TIMEZONE).format('MMM DD, YYYY h:mm A')} PHT`;
+      } catch {}
+    }
 
     const embed = new EmbedBuilder()
       .setColor(isPatch ? 0xFF4500 : 0x00BFFF)
-      .setTitle(`⚡ ${isPatch ? '🔧 New Patch / Update!' : '📰 New DI News!'}`)
+      .setTitle(isPatch ? '🔧 New Patch / Update!' : '📰 New DI News!')
+      .setURL(patchItem.link)   // makes the embed title itself a clickable link
       .setDescription(
-        `**${latestTitle}**\n\n` +
+        `**${patchItem.title}**\n\n` +
         `${isPatch
-          ? '🔧 A new game update has been detected for **Diablo Immortal**!\nUpdate your game before the next Shadow War to avoid issues.'
-          : '📣 New content or announcement from Blizzard!'
+          ? '🔧 A new **Diablo Immortal** update has dropped!\nMake sure to update your game before the next Shadow War.'
+          : '📣 New announcement from the Diablo Immortal team!'
         }\n\n` +
-        `${latestLink ? `🔗 [Read Full Article](${latestLink})` : '🔗 Check the official Diablo Immortal site for details.'}\n\n` +
+        `${patchItem.summary ? `> ${patchItem.summary}...\n\n` : ''}` +
+        `🔗 **[Read Full Patch Notes ↗](${patchItem.link})**` +
+        `${dateStr}\n\n` +
         `━━━━━━━━━━━━━━━━━━━━━━━━\n` +
         `💡 *Always update before **Thu & Sat @ 7:30 PM PHT** Shadow War!*`
       )
-      .setFooter({ text: 'Zeus Clan Patch Tracker | Auto-monitored via Blizzard News' })
+      .setFooter({ text: 'Zeus Clan Patch Tracker | Source: Blizzard RSS Feed' })
       .setTimestamp();
 
     await channel.send({ content: stronkRole, embeds: [embed] });
+
   } catch (err) {
-    console.log('Patch check error (will retry next cycle):', err.message);
+    console.log('[PatchTracker] Check error (will retry next cycle):', err.message);
   }
 }
 
 // ─── READY ────────────────────────────────────────────────────────────────────
 client.once('ready', () => {
-  console.log(`\n⚡ Zeus Bot v2.0 online! Logged in as ${client.user.tag}`);
+  console.log(`\n⚡ Zeus Bot v3.0 online! Logged in as ${client.user.tag}`);
   console.log(`📅 Timezone: Asia/Manila (PHT)`);
-  console.log(`🆕 v2 Features: Patch Tracker | DM Role Menu | Tiered War Pings | Welcome Banner\n`);
+  console.log(`🆕 v3 Features: RSS Patch Tracker (persistent + direct link) | DM Role Menu | Tiered War Pings | Welcome Banner\n`);
   client.user.setActivity('⚔️ Shadow War | $help', { type: 0 });
   scheduleReminders();
   schedulePatchTracker();
@@ -578,7 +645,7 @@ client.on('messageCreate', async message => {
 
   // ── $help ────────────────────────────────────────────────────────────────
   if (command === 'help') {
-    return message.reply({ embeds: [zeusEmbed('Zeus Bot v2.0 Commands',
+    return message.reply({ embeds: [zeusEmbed('Zeus Bot v3.0 Commands',
       `**📊 Clan Stats**\n` +
       `\`$updatestats\` — Update your stats via DM form\n` +
       `\`$mystats\` — View your current stats\n` +
@@ -682,17 +749,18 @@ client.on('messageCreate', async message => {
     if (!message.member.permissions.has(PermissionFlagsBits.ManageMessages)) {
       return message.reply('❌ Need **Manage Messages** permission.');
     }
-    const reply = await message.reply('🔍 Checking Blizzard news for new patches...');
-    const oldTitle = lastSeenPatchTitle;
-    lastSeenPatchTitle = null; // force re-check
+    const reply = await message.reply('🔍 Checking Blizzard RSS feed for new patches...');
+
+    // Clear the cache so the next check will re-announce even if already seen
+    try { fs.writeFileSync(PATCH_CACHE_FILE, JSON.stringify({ lastHash: null, lastTitle: null }, null, 2)); } catch {}
+
     await checkForNewPatch(message.guild);
-    if (lastSeenPatchTitle && lastSeenPatchTitle !== oldTitle) {
-      reply.edit('✅ New patch found and posted to `#clan-announcements`!');
-    } else if (lastSeenPatchTitle === oldTitle) {
-      lastSeenPatchTitle = oldTitle;
-      reply.edit('✅ No new patches since last check.');
+
+    const freshCache = loadPatchCache();
+    if (freshCache.lastTitle) {
+      reply.edit(`✅ Check complete! Latest: **${freshCache.lastTitle}**\nIf it's new, it's been posted to \`#clan-announcements\`.`);
     } else {
-      reply.edit('⚠️ Check complete — couldn\'t parse the Blizzard page (it may have changed).');
+      reply.edit('⚠️ Check complete — couldn\'t reach the Blizzard RSS feed. Will retry automatically next cycle.');
     }
   }
 
