@@ -8,21 +8,23 @@ const { google } = require('googleapis');
 
 // ─── SHEET CONFIG ─────────────────────────────────────────────────────────────
 const SHEET_ID   = '1qa7hwxIj6hbgQ_j1x8ygwqAQ-V4FhXicP4EVLVSfeKg';
-const SHEET_TAB  = 'Zeus';
-const DATA_RANGE = `${SHEET_TAB}!A:K`; // now includes LastUpdated in K
+const SHEET_TAB  = 'Zeus Bot';  // ← UPDATED tab name
+const DATA_RANGE = `${SHEET_TAB}!A:K`; // now includes Timestamp in K
 
+// NEW COLUMN ORDER (updated to match your reorganized sheet):
+// A: No. | B: Name | C: Class | D: Resonance | E: Armor | F: ArmorPen | G: Potency | H: Resistance | I: CR | J: DiscordID | K: Timestamp
 const COL = {
   NO:          1,  // A
   NAME:        2,  // B
   CLASS:       3,  // C
   RESONANCE:   4,  // D
-  ARMOR:       5,  // E
-  ARMOR_PEN:   6,  // F
-  POTENCY:     7,  // G
-  RESISTANCE:  8,  // H
-  CR:          9,  // I
+  ARMOR:       5,  // E  ← MOVED (was column F in old sheet)
+  ARMOR_PEN:   6,  // F  ← MOVED (was column G in old sheet)
+  POTENCY:     7,  // G  ← MOVED (was column H in old sheet)
+  RESISTANCE:  8,  // H  ← MOVED (was column I in old sheet)
+  CR:          9,  // I  ← MOVED (was column E in old sheet)
   DISCORD_ID:  10, // J
-  LAST_UPDATED:11, // K ← timestamp of last stat update
+  TIMESTAMP:   11, // K  ← was LAST_UPDATED, now TIMESTAMP
 };
 
 const PAGE_SIZE      = 15;  // members per roster page
