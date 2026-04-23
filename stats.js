@@ -49,13 +49,13 @@ const THEME = {
 
 // Class emojis for visual flair
 const CLASS_EMOJI = {
-  'Barbarian':    '🪓',
-  'Crusader':     '🛡️',
-  'Demon Hunter': '🏹',
+  'Barb':    '🪓',
+  'Crus':     '🛡️',
+  'DH': '🏹',
   'Monk':         '👊',
-  'Necromancer':  '💀',
-  'Wizard':       '🔮',
-  'Blood Knight': '🩸',
+  'Necro':  '💀',
+  'Wiz':       '🔮',
+  'BK': '🩸',
   'Tempest':      '🌪️',
 };
 
