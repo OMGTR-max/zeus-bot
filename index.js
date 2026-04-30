@@ -2,10 +2,12 @@
 // Server: SEA Bloodraven | Timezone: Asia/Manila | Prefix: $
 // NEW in v3: RSS-based Patch Tracker (always includes direct link) | Persistent patch cache
 // ENHANCED: Rich announcement embeds with interactive buttons | Type-based styling
+// v3.1: Slash commands with modal forms for announcements
 
 const {
   Client, GatewayIntentBits, EmbedBuilder, PermissionFlagsBits,
-  ActionRowBuilder, ButtonBuilder, ButtonStyle, Events
+  ActionRowBuilder, ButtonBuilder, ButtonStyle, Events, SlashCommandBuilder,
+  ModalBuilder, TextInputBuilder, TextInputStyle
 } = require('discord.js');
 const cron   = require('node-cron');
 const moment = require('moment-timezone');
@@ -27,7 +29,7 @@ const CONFIG = {
 };
 
 // ─── ANNOUNCEMENT SYSTEM CONFIGURATION ─────────────────────────────────────────
-// Roles that can use $announce command
+// Roles that can use /announce command
 const ALLOWED_ANNOUNCE_ROLES = ['Officer', 'Admin'];
 
 // Announcement types with colors, icons, and auto-ping behavior
@@ -151,57 +153,33 @@ function getStronkMention(guild) {
   return role ? `<@&${role.id}>` : '@everyone';
 }
 
-// ─── ANNOUNCEMENT COMMAND HANDLER ──────────────────────────────────────────────
-// Handles: $announce <type> | <title> | <message> | [field1: value1] | [field2: value2]
-// Types: event, urgent, update, info, warning
-async function handleAnnounceCommand(message, args, client) {
+// ─── ANNOUNCEMENT HANDLER (shared by slash command modal) ─────────────────────
+async function postAnnouncement(interaction, type, title, message, section1, section2, section3) {
   // ──────────────────────────────────────────────────────────────
   // 1. PERMISSION CHECK
   // ──────────────────────────────────────────────────────────────
-  const hasRole = message.member.roles.cache.some(r =>
+  const hasRole = interaction.member.roles.cache.some(r =>
     ALLOWED_ANNOUNCE_ROLES.includes(r.name)
   );
   if (!hasRole) {
-    return message.reply({
+    return interaction.reply({
       content: '❌ Only **Officers** and **Admins** can use announcements.',
       ephemeral: true
     });
   }
 
   // ──────────────────────────────────────────────────────────────
-  // 2. PARSE INPUT
+  // 2. VALIDATE TYPE AND BUILD CONFIG
   // ──────────────────────────────────────────────────────────────
-  const argsText = args.join(' ');
-
-  // Format: $announce <type> | <title> | <message> | [field1: value1] | [field2: value2]
-  const parts = argsText.split('|').map(p => p.trim());
-
-  if (parts.length < 3) {
-    return message.reply({
-      content:
-        '❌ **Format:** `$announce <type> | <title> | <message> | [optional fields]`\n\n' +
-        '**Available Types:** `event` `urgent` `update` `info` `warning`\n\n' +
-        '**Example:**\n' +
-        '```\n' +
-        '$announce event Shadow War Sign-Ups | Registrations Open | Deadline: Tue 9 PM | Location: Shadows Hideout\n' +
-        '```',
-      ephemeral: true
-    });
-  }
-
-  const [rawType, title, content, ...fieldParts] = parts;
-  const type = rawType.toLowerCase();
-
   if (!ANNOUNCEMENT_TYPES[type]) {
-    return message.reply({
+    return interaction.reply({
       content: `❌ Invalid type. Use: ${Object.keys(ANNOUNCEMENT_TYPES).join(', ')}`,
       ephemeral: true
     });
   }
 
-  // Validate non-empty fields
-  if (!title || !content) {
-    return message.reply({
+  if (!title || !message) {
+    return interaction.reply({
       content: '❌ Title and message cannot be empty.',
       ephemeral: true
     });
@@ -210,31 +188,28 @@ async function handleAnnounceCommand(message, args, client) {
   const { color, icon, ping } = ANNOUNCEMENT_TYPES[type];
 
   // ──────────────────────────────────────────────────────────────
-  // 3. BUILD EMBED WITH OPTIONAL FIELDS
+  // 3. BUILD EMBED WITH OPTIONAL SECTIONS
   // ──────────────────────────────────────────────────────────────
   const embed = new EmbedBuilder()
     .setTitle(`${icon} ${title}`)
-    .setDescription(content)
+    .setDescription(message)
     .setColor(color)
     .setAuthor({
-      name: message.author.username,
-      iconURL: message.author.displayAvatarURL({ dynamic: true })
+      name: interaction.user.username,
+      iconURL: interaction.user.displayAvatarURL({ dynamic: true })
     })
     .setFooter({ text: 'Zeus Clan | Diablo Immortal' })
     .setTimestamp();
 
-  // Add optional fields (Key: Value format)
-  if (fieldParts.length > 0) {
-    fieldParts.forEach(fieldStr => {
-      const match = fieldStr.match(/^([^:]+):\s*(.+)$/);
-      if (match) {
-        embed.addFields({
-          name: match[1].trim(),
-          value: match[2].trim(),
-          inline: true
-        });
-      }
-    });
+  // Add optional sections as fields
+  if (section1 && section1.trim()) {
+    embed.addFields({ name: '📌 Section 1', value: section1.trim(), inline: false });
+  }
+  if (section2 && section2.trim()) {
+    embed.addFields({ name: '📌 Section 2', value: section2.trim(), inline: false });
+  }
+  if (section3 && section3.trim()) {
+    embed.addFields({ name: '📌 Section 3', value: section3.trim(), inline: false });
   }
 
   // ──────────────────────────────────────────────────────────────
@@ -243,17 +218,17 @@ async function handleAnnounceCommand(message, args, client) {
   const buttons = new ActionRowBuilder()
     .addComponents(
       new ButtonBuilder()
-        .setCustomId(`announce_acknowledge_${message.author.id}`)
+        .setCustomId(`announce_acknowledge_${interaction.user.id}`)
         .setLabel('✅ Acknowledged')
         .setStyle(ButtonStyle.Success),
 
       new ButtonBuilder()
-        .setCustomId(`announce_react_${message.author.id}`)
+        .setCustomId(`announce_react_${interaction.user.id}`)
         .setLabel('👍 React')
         .setStyle(ButtonStyle.Primary),
 
       new ButtonBuilder()
-        .setCustomId(`announce_delete_${message.author.id}`)
+        .setCustomId(`announce_delete_${interaction.user.id}`)
         .setLabel('🗑️ Delete')
         .setStyle(ButtonStyle.Danger)
     );
@@ -261,9 +236,12 @@ async function handleAnnounceCommand(message, args, client) {
   // ──────────────────────────────────────────────────────────────
   // 5. SEND TO ANNOUNCEMENT CHANNEL
   // ──────────────────────────────────────────────────────────────
-  const announcementChannel = getChannel(message.guild, CONFIG.announcementChannelName);
+  const announcementChannel = getChannel(interaction.guild, CONFIG.announcementChannelName);
   if (!announcementChannel) {
-    return message.reply('❌ `#clan-announcements` channel not found.');
+    return interaction.reply({
+      content: '❌ `#clan-announcements` channel not found.',
+      ephemeral: true
+    });
   }
 
   try {
@@ -273,7 +251,7 @@ async function handleAnnounceCommand(message, args, client) {
       components: [buttons]
     });
 
-    message.reply({
+    await interaction.reply({
       content: `✅ Announcement posted to <#${announcementChannel.id}>!`,
       ephemeral: true
     });
@@ -281,46 +259,43 @@ async function handleAnnounceCommand(message, args, client) {
     // ──────────────────────────────────────────────────────────────
     // 6. BUTTON INTERACTION COLLECTOR (24-hour lifetime)
     // ──────────────────────────────────────────────────────────────
-    const filter = interaction =>
-      interaction.customId.startsWith('announce_') &&
-      interaction.message.id === sentMessage.id;
+    const filter = btn =>
+      btn.customId.startsWith('announce_') &&
+      btn.message.id === sentMessage.id;
 
     const collector = sentMessage.createMessageComponentCollector({
       filter,
       time: 24 * 60 * 60 * 1000 // 24 hours
     });
 
-    collector.on('collect', async interaction => {
-      const [, action, authorId] = interaction.customId.split('_');
-      const isAuthor = interaction.user.id === authorId;
-      const isAdmin = message.member.roles.cache.some(r =>
+    collector.on('collect', async btn => {
+      const [, action, authorId] = btn.customId.split('_');
+      const isAuthor = btn.user.id === authorId;
+      const isAdmin = btn.member.roles.cache.some(r =>
         ALLOWED_ANNOUNCE_ROLES.includes(r.name)
       );
 
       if (action === 'acknowledge') {
-        // Track who acknowledged
-        await interaction.reply({
-          content: `✅ ${interaction.user.username} acknowledged this announcement.`,
+        await btn.reply({
+          content: `✅ ${btn.user.username} acknowledged this announcement.`,
           ephemeral: false
         });
       }
       else if (action === 'react') {
-        // Quick reaction poll
-        await interaction.reply({
-          content: `👍 ${interaction.user.username} reacted to this announcement.`,
+        await btn.reply({
+          content: `👍 ${btn.user.username} reacted to this announcement.`,
           ephemeral: false
         });
       }
       else if (action === 'delete') {
-        // Only author + admins can delete
         if (!isAuthor && !isAdmin) {
-          return interaction.reply({
+          return btn.reply({
             content: '❌ Only the author or an admin can delete this announcement.',
             ephemeral: true
           });
         }
         await sentMessage.delete();
-        await interaction.reply({
+        await btn.reply({
           content: '🗑️ Announcement deleted.',
           ephemeral: true
         });
@@ -330,7 +305,10 @@ async function handleAnnounceCommand(message, args, client) {
 
   } catch (err) {
     console.error('[Announce] Error:', err);
-    message.reply('❌ Failed to post announcement. Check bot permissions.');
+    await interaction.reply({
+      content: '❌ Failed to post announcement. Check bot permissions.',
+      ephemeral: true
+    });
   }
 }
 
@@ -426,10 +404,27 @@ async function sendRoleDM(member) {
   }
 }
 
-// ─── BUTTON HANDLER ───────────────────────────────────────────────────────────
+// ─── BUTTON & SLASH COMMAND HANDLER ────────────────────────────────────────────
 client.on(Events.InteractionCreate, async interaction => {
   // ── Roster pagination buttons ─────────────────────────────────────────────
   if (await stats.handleRosterButton(interaction)) return;
+
+  // ── Slash command: /announce ──────────────────────────────────────────────
+  if (interaction.isCommand && interaction.commandName === 'announce') {
+    const type = interaction.options.getString('type');
+    const title = interaction.options.getString('title');
+    const message = interaction.options.getString('message');
+    const section1 = interaction.options.getString('section-1');
+    const section2 = interaction.options.getString('section-2');
+    const section3 = interaction.options.getString('section-3');
+
+    return postAnnouncement(interaction, type, title, message, section1, section2, section3);
+  }
+
+  // ── Modal submission (not used in announce anymore, but kept for future) ────
+  if (interaction.isModalSubmit()) {
+    return;
+  }
 
   // ── Role assignment buttons ───────────────────────────────────────────────
   if (!interaction.isButton()) return;
@@ -623,12 +618,77 @@ async function checkForNewPatch(guild) {
 client.once('ready', () => {
   console.log(`\n⚡ Zeus Bot v3.0 online! Logged in as ${client.user.tag}`);
   console.log(`📅 Timezone: Asia/Manila (PHT)`);
-  console.log(`🆕 v3 Features: RSS Patch Tracker (persistent + direct link) | DM Role Menu | Tiered War Pings | Welcome Banner`);
+  console.log(`🆕 v3.1 Features: Slash command /announce with modal form | RSS Patch Tracker | DM Role Menu`);
   console.log(`✨ ENHANCED: Rich Announcement Embeds with Interactive Buttons\n`);
-  client.user.setActivity('⚔️ Shadow War | $help', { type: 0 });
+  client.user.setActivity('⚔️ Shadow War | /announce', { type: 0 });
   scheduleReminders();
   schedulePatchTracker();
+  registerSlashCommands();
 });
+
+// ─── REGISTER SLASH COMMANDS ──────────────────────────────────────────────────
+async function registerSlashCommands() {
+  try {
+    const commands = [
+      new SlashCommandBuilder()
+        .setName('announce')
+        .setDescription('Post a rich clan announcement with interactive buttons')
+        .addStringOption(option =>
+          option
+            .setName('type')
+            .setDescription('Announcement type (determines color and icon)')
+            .setRequired(true)
+            .addChoices(
+              { name: '📅 Event', value: 'event' },
+              { name: '🚨 Urgent', value: 'urgent' },
+              { name: '🆕 Update', value: 'update' },
+              { name: 'ℹ️ Info', value: 'info' },
+              { name: '⚠️ Warning', value: 'warning' }
+            )
+        )
+        .addStringOption(option =>
+          option
+            .setName('title')
+            .setDescription('Announcement title')
+            .setRequired(true)
+            .setMaxLength(100)
+        )
+        .addStringOption(option =>
+          option
+            .setName('message')
+            .setDescription('Main announcement content (paragraphs supported)')
+            .setRequired(true)
+            .setMaxLength(4000)
+        )
+        .addStringOption(option =>
+          option
+            .setName('section-1')
+            .setDescription('Optional section 1 (e.g., Schedule, Requirements)')
+            .setRequired(false)
+            .setMaxLength(1024)
+        )
+        .addStringOption(option =>
+          option
+            .setName('section-2')
+            .setDescription('Optional section 2')
+            .setRequired(false)
+            .setMaxLength(1024)
+        )
+        .addStringOption(option =>
+          option
+            .setName('section-3')
+            .setDescription('Optional section 3')
+            .setRequired(false)
+            .setMaxLength(1024)
+        ),
+    ];
+
+    await client.application.commands.set(commands);
+    console.log('✅ Slash commands registered: /announce');
+  } catch (err) {
+    console.error('[Slash Commands] Error registering:', err);
+  }
+}
 
 // ─── PATCH TRACKER SCHEDULE ───────────────────────────────────────────────────
 function schedulePatchTracker() {
@@ -862,7 +922,7 @@ client.on('messageCreate', async message => {
       `\`$roles\` — List available roles\n` +
       `\`$giverole @user [role]\` — Assign role (Admin)\n\n` +
       `**📢 Announcements**\n` +
-      `\`$announce [type] | [title] | [message]\` — Rich announcement (Officer+)\n` +
+      `\`/announce\` — Rich announcement with interactive buttons (Officer+)\n` +
       `\`$ping @role [msg]\` — Ping a role (Admin)\n` +
       `\`$checkpatch\` — Manual patch check (Admin)\n\n` +
       `**🛡️ Moderation**\n` +
@@ -964,13 +1024,6 @@ client.on('messageCreate', async message => {
     } else {
       reply.edit('⚠️ Check complete — couldn\'t reach the Blizzard RSS feed. Will retry automatically next cycle.');
     }
-  }
-
-  // ── $announce ─────────────────────────────────────────────────────────────
-  // ENHANCED: Rich announcements with type-based styling and interactive buttons
-  if (command === 'announce') {
-    await handleAnnounceCommand(message, args, client);
-    return;
   }
 
   // ── $ping ─────────────────────────────────────────────────────────────────
