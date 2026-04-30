@@ -337,10 +337,6 @@ async function postAnnouncement(interaction, type, title, message, section1, sec
   }
 }
 
-// ─── WELCOME BANNER ───────────────────────────────────────────────────────────
-// Creates a rich embed card that acts as the welcome banner.
-// To use a real image banner, upload one to Imgur and paste the URL below.
-const BANNER_URL = ''; // Optional: paste your banner image URL here e.g. 'https://i.imgur.com/XXXXX.png'
 
 function buildWelcomeBanner(member) {
   const joined      = moment(member.joinedAt).tz(TIMEZONE).format('MMM DD, YYYY');
