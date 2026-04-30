@@ -32,13 +32,21 @@ const CONFIG = {
 // Roles that can use /announce command
 const ALLOWED_ANNOUNCE_ROLES = ['Officer', 'Admin'];
 
+// Banner image URL (local file served or hosted image)
+const BANNER_URL = 'https://raw.githubusercontent.com/yourusername/zeus-bot/main/assets/zeus-banner.png';
+
 // Announcement types with colors, icons, and auto-ping behavior
+// Colors refined to complement the "Thunderous Clarity" design philosophy:
+// - Primary accent: Cyan (#00C8FF) for updates and information
+// - Alert accent: Crimson red for urgent matters
+// - Gold (#FFC832) for events and special announcements
+// - Silver/blue for informational content
 const ANNOUNCEMENT_TYPES = {
-  event:   { color: 0xFF6347, icon: '📅', ping: null },
-  urgent:  { color: 0xFF0000, icon: '🚨', ping: '@everyone' },
-  update:  { color: 0x32CD32, icon: '🆕', ping: null },
-  info:    { color: 0x00BFFF, icon: 'ℹ️', ping: null },
-  warning: { color: 0xFFA500, icon: '⚠️', ping: '@here' },
+  event:   { color: 0xFFC832, icon: '📅', ping: null },        // Gold - celebratory/special
+  urgent:  { color: 0xFF2E3E, icon: '🚨', ping: '@everyone' }, // Crimson - high alert
+  update:  { color: 0x00D9FF, icon: '🆕', ping: null },        // Cyan - fresh/new
+  info:    { color: 0x5DADE2, icon: 'ℹ️', ping: null },        // Steel blue - informational
+  warning: { color: 0xFFA500, icon: '⚠️', ping: '@here' },     // Orange - caution
 };
 
 // ─── ROLE IDs (hardcoded from your Discord server) ───────────────────────────
@@ -190,26 +198,43 @@ async function postAnnouncement(interaction, type, title, message, section1, sec
   // ──────────────────────────────────────────────────────────────
   // 3. BUILD EMBED WITH OPTIONAL SECTIONS
   // ──────────────────────────────────────────────────────────────
+
+  // Build a visually enhanced description with better formatting
+  const formattedMessage = `>>> ${message}`;
+
   const embed = new EmbedBuilder()
-    .setTitle(`${icon} ${title}`)
-    .setDescription(message)
+    .setTitle(`${icon} **${title.toUpperCase()}**`)
+    .setDescription(formattedMessage)
     .setColor(color)
     .setAuthor({
-      name: interaction.user.username,
+      name: `⚡ ${interaction.user.username}`,
       iconURL: interaction.user.displayAvatarURL({ dynamic: true })
     })
-    .setFooter({ text: 'Zeus Clan | Diablo Immortal' })
+    .setImage(BANNER_URL)  // Add the Zeus banner at the top
+    .setFooter({ text: 'Zeus Clan | ⚔️ SEA Bloodraven | Diablo Immortal' })
     .setTimestamp();
 
-  // Add optional sections as fields
+  // Add optional sections as visually enhanced fields
   if (section1 && section1.trim()) {
-    embed.addFields({ name: '📌 Section 1', value: section1.trim(), inline: false });
+    embed.addFields({
+      name: '━━━━━━━━━━━━━━━━━━━\n🔱 **SECTION 1**',
+      value: `>>> ${section1.trim()}`,
+      inline: false
+    });
   }
   if (section2 && section2.trim()) {
-    embed.addFields({ name: '📌 Section 2', value: section2.trim(), inline: false });
+    embed.addFields({
+      name: '🔱 **SECTION 2**',
+      value: `>>> ${section2.trim()}`,
+      inline: false
+    });
   }
   if (section3 && section3.trim()) {
-    embed.addFields({ name: '📌 Section 3', value: section3.trim(), inline: false });
+    embed.addFields({
+      name: '🔱 **SECTION 3**',
+      value: `>>> ${section3.trim()}`,
+      inline: false
+    });
   }
 
   // ──────────────────────────────────────────────────────────────
