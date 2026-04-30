@@ -4,8 +4,8 @@
 
 const {
 Client, GatewayIntentBits, EmbedBuilder, PermissionFlagsBits,
-ActionRowBuilder, ButtonBuilder, ButtonStyle, Events
-} = require(‘discord.js’);
+ActionRowBuilder, ButtonBuilder, ButtonStyle,
+} = require('discord.js');
 const cron   = require(‘node-cron’);
 const moment = require(‘moment-timezone’);
 const axios  = require(‘axios’);
