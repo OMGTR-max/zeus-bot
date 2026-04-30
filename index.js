@@ -1,6 +1,7 @@
 // ⚡ ZEUS BOT v3.0 — Clan Bot for Diablo Immortal | Zeus Clan
 // Server: SEA Bloodraven | Timezone: Asia/Manila | Prefix: $
 // NEW in v3: RSS-based Patch Tracker (always includes direct link) | Persistent patch cache
+// ENHANCED: Rich announcement embeds with interactive buttons | Type-based styling
 
 const {
   Client, GatewayIntentBits, EmbedBuilder, PermissionFlagsBits,
@@ -23,6 +24,19 @@ const CONFIG = {
   shadowWarChannelName:    'shadow-war-alerts',
   welcomeChannelName:      'welcome',
   modLogChannelName:       'mod-log',
+};
+
+// ─── ANNOUNCEMENT SYSTEM CONFIGURATION ─────────────────────────────────────────
+// Roles that can use $announce command
+const ALLOWED_ANNOUNCE_ROLES = ['Officer', 'Admin'];
+
+// Announcement types with colors, icons, and auto-ping behavior
+const ANNOUNCEMENT_TYPES = {
+  event:   { color: 0xFF6347, icon: '📅', ping: null },
+  urgent:  { color: 0xFF0000, icon: '🚨', ping: '@everyone' },
+  update:  { color: 0x32CD32, icon: '🆕', ping: null },
+  info:    { color: 0x00BFFF, icon: 'ℹ️', ping: null },
+  warning: { color: 0xFFA500, icon: '⚠️', ping: '@here' },
 };
 
 // ─── ROLE IDs (hardcoded from your Discord server) ───────────────────────────
@@ -137,6 +151,189 @@ function getStronkMention(guild) {
   return role ? `<@&${role.id}>` : '@everyone';
 }
 
+// ─── ANNOUNCEMENT COMMAND HANDLER ──────────────────────────────────────────────
+// Handles: $announce <type> | <title> | <message> | [field1: value1] | [field2: value2]
+// Types: event, urgent, update, info, warning
+async function handleAnnounceCommand(message, args, client) {
+  // ──────────────────────────────────────────────────────────────
+  // 1. PERMISSION CHECK
+  // ──────────────────────────────────────────────────────────────
+  const hasRole = message.member.roles.cache.some(r =>
+    ALLOWED_ANNOUNCE_ROLES.includes(r.name)
+  );
+  if (!hasRole) {
+    return message.reply({
+      content: '❌ Only **Officers** and **Admins** can use announcements.',
+      ephemeral: true
+    });
+  }
+
+  // ──────────────────────────────────────────────────────────────
+  // 2. PARSE INPUT
+  // ──────────────────────────────────────────────────────────────
+  const argsText = args.join(' ');
+
+  // Format: $announce <type> | <title> | <message> | [field1: value1] | [field2: value2]
+  const parts = argsText.split('|').map(p => p.trim());
+
+  if (parts.length < 3) {
+    return message.reply({
+      content:
+        '❌ **Format:** `$announce <type> | <title> | <message> | [optional fields]`\n\n' +
+        '**Available Types:** `event` `urgent` `update` `info` `warning`\n\n' +
+        '**Example:**\n' +
+        '```\n' +
+        '$announce event Shadow War Sign-Ups | Registrations Open | Deadline: Tue 9 PM | Location: Shadows Hideout\n' +
+        '```',
+      ephemeral: true
+    });
+  }
+
+  const [rawType, title, content, ...fieldParts] = parts;
+  const type = rawType.toLowerCase();
+
+  if (!ANNOUNCEMENT_TYPES[type]) {
+    return message.reply({
+      content: `❌ Invalid type. Use: ${Object.keys(ANNOUNCEMENT_TYPES).join(', ')}`,
+      ephemeral: true
+    });
+  }
+
+  // Validate non-empty fields
+  if (!title || !content) {
+    return message.reply({
+      content: '❌ Title and message cannot be empty.',
+      ephemeral: true
+    });
+  }
+
+  const { color, icon, ping } = ANNOUNCEMENT_TYPES[type];
+
+  // ──────────────────────────────────────────────────────────────
+  // 3. BUILD EMBED WITH OPTIONAL FIELDS
+  // ──────────────────────────────────────────────────────────────
+  const embed = new EmbedBuilder()
+    .setTitle(`${icon} ${title}`)
+    .setDescription(content)
+    .setColor(color)
+    .setAuthor({
+      name: message.author.username,
+      iconURL: message.author.displayAvatarURL({ dynamic: true })
+    })
+    .setFooter({ text: 'Zeus Clan | Diablo Immortal' })
+    .setTimestamp();
+
+  // Add optional fields (Key: Value format)
+  if (fieldParts.length > 0) {
+    fieldParts.forEach(fieldStr => {
+      const match = fieldStr.match(/^([^:]+):\s*(.+)$/);
+      if (match) {
+        embed.addFields({
+          name: match[1].trim(),
+          value: match[2].trim(),
+          inline: true
+        });
+      }
+    });
+  }
+
+  // ──────────────────────────────────────────────────────────────
+  // 4. BUILD INTERACTIVE BUTTONS
+  // ──────────────────────────────────────────────────────────────
+  const buttons = new ActionRowBuilder()
+    .addComponents(
+      new ButtonBuilder()
+        .setCustomId(`announce_acknowledge_${message.author.id}`)
+        .setLabel('✅ Acknowledged')
+        .setStyle(ButtonStyle.Success),
+
+      new ButtonBuilder()
+        .setCustomId(`announce_react_${message.author.id}`)
+        .setLabel('👍 React')
+        .setStyle(ButtonStyle.Primary),
+
+      new ButtonBuilder()
+        .setCustomId(`announce_delete_${message.author.id}`)
+        .setLabel('🗑️ Delete')
+        .setStyle(ButtonStyle.Danger)
+    );
+
+  // ──────────────────────────────────────────────────────────────
+  // 5. SEND TO ANNOUNCEMENT CHANNEL
+  // ──────────────────────────────────────────────────────────────
+  const announcementChannel = getChannel(message.guild, CONFIG.announcementChannelName);
+  if (!announcementChannel) {
+    return message.reply('❌ `#clan-announcements` channel not found.');
+  }
+
+  try {
+    const sentMessage = await announcementChannel.send({
+      content: ping ? `${ping} 📣` : null,
+      embeds: [embed],
+      components: [buttons]
+    });
+
+    message.reply({
+      content: `✅ Announcement posted to <#${announcementChannel.id}>!`,
+      ephemeral: true
+    });
+
+    // ──────────────────────────────────────────────────────────────
+    // 6. BUTTON INTERACTION COLLECTOR (24-hour lifetime)
+    // ──────────────────────────────────────────────────────────────
+    const filter = interaction =>
+      interaction.customId.startsWith('announce_') &&
+      interaction.message.id === sentMessage.id;
+
+    const collector = sentMessage.createMessageComponentCollector({
+      filter,
+      time: 24 * 60 * 60 * 1000 // 24 hours
+    });
+
+    collector.on('collect', async interaction => {
+      const [, action, authorId] = interaction.customId.split('_');
+      const isAuthor = interaction.user.id === authorId;
+      const isAdmin = message.member.roles.cache.some(r =>
+        ALLOWED_ANNOUNCE_ROLES.includes(r.name)
+      );
+
+      if (action === 'acknowledge') {
+        // Track who acknowledged
+        await interaction.reply({
+          content: `✅ ${interaction.user.username} acknowledged this announcement.`,
+          ephemeral: false
+        });
+      }
+      else if (action === 'react') {
+        // Quick reaction poll
+        await interaction.reply({
+          content: `👍 ${interaction.user.username} reacted to this announcement.`,
+          ephemeral: false
+        });
+      }
+      else if (action === 'delete') {
+        // Only author + admins can delete
+        if (!isAuthor && !isAdmin) {
+          return interaction.reply({
+            content: '❌ Only the author or an admin can delete this announcement.',
+            ephemeral: true
+          });
+        }
+        await sentMessage.delete();
+        await interaction.reply({
+          content: '🗑️ Announcement deleted.',
+          ephemeral: true
+        });
+        collector.stop();
+      }
+    });
+
+  } catch (err) {
+    console.error('[Announce] Error:', err);
+    message.reply('❌ Failed to post announcement. Check bot permissions.');
+  }
+}
+
 // ─── WELCOME BANNER ───────────────────────────────────────────────────────────
 // Creates a rich embed card that acts as the welcome banner.
 // To use a real image banner, upload one to Imgur and paste the URL below.
@@ -237,6 +434,10 @@ client.on(Events.InteractionCreate, async interaction => {
   // ── Role assignment buttons ───────────────────────────────────────────────
   if (!interaction.isButton()) return;
   const { customId, user } = interaction;
+
+  // ── Skip announcement buttons (handled by collector) ──────────────────────
+  if (customId.startsWith('announce_')) return;
+
   if (!customId.startsWith('role_')) return;
 
   // Find member across guilds (needed since button is in DM)
@@ -422,7 +623,8 @@ async function checkForNewPatch(guild) {
 client.once('ready', () => {
   console.log(`\n⚡ Zeus Bot v3.0 online! Logged in as ${client.user.tag}`);
   console.log(`📅 Timezone: Asia/Manila (PHT)`);
-  console.log(`🆕 v3 Features: RSS Patch Tracker (persistent + direct link) | DM Role Menu | Tiered War Pings | Welcome Banner\n`);
+  console.log(`🆕 v3 Features: RSS Patch Tracker (persistent + direct link) | DM Role Menu | Tiered War Pings | Welcome Banner`);
+  console.log(`✨ ENHANCED: Rich Announcement Embeds with Interactive Buttons\n`);
   client.user.setActivity('⚔️ Shadow War | $help', { type: 0 });
   scheduleReminders();
   schedulePatchTracker();
@@ -660,7 +862,7 @@ client.on('messageCreate', async message => {
       `\`$roles\` — List available roles\n` +
       `\`$giverole @user [role]\` — Assign role (Admin)\n\n` +
       `**📢 Announcements**\n` +
-      `\`$announce [msg]\` — Post announcement (Admin)\n` +
+      `\`$announce [type] | [title] | [message]\` — Rich announcement (Officer+)\n` +
       `\`$ping @role [msg]\` — Ping a role (Admin)\n` +
       `\`$checkpatch\` — Manual patch check (Admin)\n\n` +
       `**🛡️ Moderation**\n` +
@@ -765,14 +967,10 @@ client.on('messageCreate', async message => {
   }
 
   // ── $announce ─────────────────────────────────────────────────────────────
+  // ENHANCED: Rich announcements with type-based styling and interactive buttons
   if (command === 'announce') {
-    if (!message.member.permissions.has(PermissionFlagsBits.ManageMessages)) return message.reply('❌ Need **Manage Messages** permission.');
-    const text = args.join(' ');
-    if (!text) return message.reply('❌ Usage: `$announce [message]`');
-    const ch = getChannel(message.guild, CONFIG.announcementChannelName);
-    if (!ch) return message.reply('❌ `#clan-announcements` not found.');
-    await ch.send({ embeds: [zeusEmbed('📢 Clan Announcement', text, 0x00BFFF)] });
-    return message.reply('✅ Posted!');
+    await handleAnnounceCommand(message, args, client);
+    return;
   }
 
   // ── $ping ─────────────────────────────────────────────────────────────────
