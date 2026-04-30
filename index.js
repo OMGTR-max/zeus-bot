@@ -3,10 +3,9 @@
 // NEW in v2: Patch Tracker | Role DM Menu | Tiered Shadow War Pings | Welcome Banner
 
 const {
-  Client, GatewayIntentBits, EmbedBuilder, PermissionFlagsBits,
-  ActionRowBuilder, ButtonBuilder, ButtonStyle, Events
-} = require('discord.js');
-
+Client, GatewayIntentBits, EmbedBuilder, PermissionFlagsBits,
+ActionRowBuilder, ButtonBuilder, ButtonStyle, Events
+} = require(‘discord.js’);
 const cron   = require(‘node-cron’);
 const moment = require(‘moment-timezone’);
 const axios  = require(‘axios’);
@@ -110,7 +109,7 @@ return role ? `<@&${role.id}>` : ‘@everyone’;
 // ─── WELCOME BANNER ───────────────────────────────────────────────────────────
 // Creates a rich embed card that acts as the welcome banner.
 // To use a real image banner, upload one to Imgur and paste the URL below.
-const BANNER_URL = ‘https://imgur.com/a/8CAF01h’; // Zeus Clan welcome banner
+const BANNER_URL = ‘https://i.imgur.com/STS2CwI.png’; // Zeus Clan welcome banner
 
 function buildWelcomeBanner(member) {
 const joined      = moment(member.joinedAt).tz(TIMEZONE).format(‘MMM DD, YYYY’);
