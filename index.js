@@ -646,7 +646,9 @@ client.once('ready', () => {
   console.log(`✨ ENHANCED: Rich Announcement Embeds with Interactive Buttons\n`);
   client.user.setActivity('⚔️ Shadow War | /announce', { type: 0 });
   scheduleReminders();
-  schedulePatchTracker();
+  // Patch Tracker disabled — Blizzard RSS feed produces stale/delayed
+  // posts. Re-enable by uncommenting the line below.
+  // schedulePatchTracker();
   registerSlashCommands();
 });
 
