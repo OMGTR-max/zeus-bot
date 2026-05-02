@@ -7,7 +7,7 @@
 const {
   Client, GatewayIntentBits, EmbedBuilder, PermissionFlagsBits,
   ActionRowBuilder, ButtonBuilder, ButtonStyle, Events, SlashCommandBuilder,
-  ModalBuilder, TextInputBuilder, TextInputStyle
+  ModalBuilder, TextInputBuilder, TextInputStyle, ChannelType
 } = require('discord.js');
 const cron   = require('node-cron');
 const moment = require('moment-timezone');
@@ -678,7 +678,7 @@ async function handleSetupCommand(interaction) {
   const cfg = attendance.loadConfig();
   const opts = interaction.options;
 
-  const warVoice    = opts.getChannel('war-voice');
+  const warVoiceCat = opts.getChannel('war-voice-category');
   const checkInCh   = opts.getChannel('checkin-channel');
   const lbCh        = opts.getChannel('leaderboard-channel');
   const mvpRole     = opts.getRole('mvp-role');
@@ -687,7 +687,7 @@ async function handleSetupCommand(interaction) {
   const veteranRole = opts.getRole('veteran-role');
   const officerRole = opts.getRole('officer-role');
 
-  if (warVoice)    cfg.warVoiceChannelId    = warVoice.id;
+  if (warVoiceCat) cfg.warVoiceCategoryId   = warVoiceCat.id;
   if (checkInCh)   cfg.checkInChannelId     = checkInCh.id;
   if (lbCh)        cfg.leaderboardChannelId = lbCh.id;
   if (mvpRole)     cfg.awardRoles.mvp              = mvpRole.id;
@@ -701,7 +701,7 @@ async function handleSetupCommand(interaction) {
   }
   attendance.saveConfig(cfg);
 
-  const fmt = (id, type) => id ? `<#${id}>` : '`(unset)`';
+  const fmt = id => id ? `<#${id}>` : '`(unset)`';
   const fmtRole = id => id ? `<@&${id}>` : '`(unset)`';
   const officerList = cfg.officerRoleIds.length
     ? cfg.officerRoleIds.map(id => `<@&${id}>`).join(', ')
@@ -710,7 +710,7 @@ async function handleSetupCommand(interaction) {
   const embed = zeusEmbed(
     'Attendance Setup',
     `**Channels**\n` +
-    `• War voice: ${fmt(cfg.warVoiceChannelId)}\n` +
+    `• War voice category: ${fmt(cfg.warVoiceCategoryId)}\n` +
     `• Check-in: ${fmt(cfg.checkInChannelId)}\n` +
     `• Leaderboard: ${fmt(cfg.leaderboardChannelId)}\n\n` +
     `**Award roles**\n` +
@@ -969,7 +969,10 @@ async function registerSlashCommands() {
         .setName('setup')
         .setDescription('Configure attendance tracker channels and award roles')
         .addChannelOption(o =>
-          o.setName('war-voice').setDescription('Voice channel monitored during wars').setRequired(false)
+          o.setName('war-voice-category')
+           .setDescription('Voice category — any voice channel inside is monitored during wars')
+           .addChannelTypes(ChannelType.GuildCategory)
+           .setRequired(false)
         )
         .addChannelOption(o =>
           o.setName('checkin-channel').setDescription('Where check-in messages are posted').setRequired(false)

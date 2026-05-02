@@ -44,7 +44,7 @@ function loadConfig() {
 
 function defaultConfig() {
   return {
-    warVoiceChannelId: null,
+    warVoiceCategoryId: null,
     checkInChannelId:  null,
     leaderboardChannelId: null,
     awardRoles: {
@@ -192,9 +192,17 @@ function recordAttendance(userId, eventKey, eventDate) {
 async function handleVoiceStateUpdate(oldState, newState) {
   try {
     const cfg = loadConfig();
-    if (!cfg.warVoiceChannelId) return;
-    if (newState.channelId !== cfg.warVoiceChannelId) return;
-    if (oldState.channelId === cfg.warVoiceChannelId) return; // already in
+    if (!cfg.warVoiceCategoryId) return;
+
+    const newCh = newState.channel;
+    const oldCh = oldState.channel;
+    const inWarCategoryNow  = newCh && newCh.parentId === cfg.warVoiceCategoryId;
+    const inWarCategoryBefore = oldCh && oldCh.parentId === cfg.warVoiceCategoryId;
+
+    // Only act when the user *enters* the war category (from outside it).
+    // Moves between rooms within the same category don't re-trigger.
+    if (!inWarCategoryNow) return;
+    if (inWarCategoryBefore) return;
 
     const event = getActiveEvent(new Date());
     if (!event) return;
@@ -202,7 +210,7 @@ async function handleVoiceStateUpdate(oldState, newState) {
     const recorded = recordAttendance(newState.id, event.key, event.eventDate);
     if (recorded) {
       const tag = newState.member?.user?.tag || newState.id;
-      console.log(`[Attendance] ${tag} credited for ${event.def.name}`);
+      console.log(`[Attendance] ${tag} credited for ${event.def.name} (joined ${newCh.name})`);
     }
   } catch (e) {
     console.log('[Attendance] voice handler error:', e.message);
