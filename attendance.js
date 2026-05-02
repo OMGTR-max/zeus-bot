@@ -291,6 +291,40 @@ function closeCheckIn(messageId) {
   saveState(state);
 }
 
+// ─── CHAT ACTIVITY (officer-only signal, not a public competition) ──────────
+function recordChatMessage(userId, channelId) {
+  const state = loadState();
+  if (!state) return; // only track during an active cycle
+  if (!state.chatActivity) state.chatActivity = {};
+  if (!state.chatActivity[userId]) {
+    state.chatActivity[userId] = { count: 0, lastMessage: null };
+  }
+  state.chatActivity[userId].count++;
+  state.chatActivity[userId].lastMessage = new Date().toISOString();
+  saveState(state);
+}
+
+function getActivityReport(guild, officerRoleIds = []) {
+  const state = loadState();
+  if (!state) return null;
+  const activity = state.chatActivity || {};
+  const entries = Object.entries(activity).map(([userId, data]) => {
+    const member = guild?.members?.cache?.get(userId);
+    const isOfficer = officerRoleIds.length && member
+      ? member.roles.cache.some(r => officerRoleIds.includes(r.id))
+      : false;
+    return {
+      userId,
+      username: member?.displayName || member?.user?.username || `<@${userId}>`,
+      count: data.count,
+      lastMessage: data.lastMessage,
+      isOfficer,
+    };
+  });
+  entries.sort((a, b) => b.count - a.count);
+  return entries;
+}
+
 // ─── LEADERBOARD & WINNERS ────────────────────────────────────────────────────
 function buildLeaderboard(state, officerRoleIds = [], guild = null) {
   const max = computeMaxEvents(state);
@@ -409,4 +443,6 @@ module.exports = {
   buildLeaderboard,
   pickWinners,
   endCycle,
+  recordChatMessage,
+  getActivityReport,
 };
