@@ -1132,8 +1132,15 @@ async function registerSlashCommands() {
         .setDescription('Post the Zeus Clan officer roles and responsibilities'),
     ];
 
-    await client.application.commands.set(commands);
-    console.log('✅ Slash commands registered: /announce, /setup, /cycle-start, /cycle-status, /leaderboard, /cycle-end, /activity, /officers');
+    const guildId = process.env.DISCORD_GUILD_ID || '1015207597575507998';
+    const guild = client.guilds.cache.get(guildId);
+    if (guild) {
+      await guild.commands.set(commands);
+      console.log(`✅ Slash commands registered to guild ${guild.name} (instant): /announce, /setup, /cycle-start, /cycle-status, /leaderboard, /cycle-end, /activity, /officers`);
+    } else {
+      await client.application.commands.set(commands);
+      console.log('✅ Slash commands registered globally (may take up to 1h): /announce, /setup, /cycle-start, /cycle-status, /leaderboard, /cycle-end, /activity, /officers');
+    }
   } catch (err) {
     console.error('[Slash Commands] Error registering:', err);
   }
