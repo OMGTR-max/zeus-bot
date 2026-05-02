@@ -1,0 +1,7 @@
+node_modules/
+.env
+.patch_cache.json
+.attendance.json
+.attendance_config.json
+.attendance_history.json
+*.log
