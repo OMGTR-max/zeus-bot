@@ -465,6 +465,7 @@ client.on(Events.InteractionCreate, async interaction => {
     if (interaction.commandName === 'cycle-start')  return handleCycleStartCommand(interaction);
     if (interaction.commandName === 'cycle-status') return handleCycleStatusCommand(interaction);
     if (interaction.commandName === 'activity')     return handleActivityCommand(interaction);
+    if (interaction.commandName === 'officers')     return handleOfficersCommand(interaction);
   }
 
   // ── Modal submission (not used in announce anymore, but kept for future) ────
@@ -907,6 +908,57 @@ async function handleActivityCommand(interaction) {
   });
 }
 
+// ─── /officers — post officer roles as styled embeds ───────────────────────
+async function handleOfficersCommand(interaction) {
+  const header = new EmbedBuilder()
+    .setColor(0xFFD700)
+    .setTitle('⚡ Zeus Clan — Officer Roles')
+    .setDescription('Officer responsibilities, reporting lines, and key workflows.');
+
+  const tier1 = new EmbedBuilder()
+    .setColor(0xE67E22)
+    .setTitle('🔱 Tier 1 — Senior Officers')
+    .addFields(
+      { name: 'Menelaus — Clan Relations + Bot Ops', value: '• Alliance contact + internal affairs\n• Drafts Shadow War / VoB lineup\n• Day-to-day bot operations' },
+      { name: 'Pandapple — War Captain + External Comms', value: '• War lineup execution in-game\n• Daily alliance / bzap server contact' },
+      { name: 'Paunginoon — War Captain + Attendance', value: '• War lineup execution in-game\n• War attendance + roster (sole owner)' },
+      { name: 'ATL — External Comms (Backup)', value: '• Backup alliance liaison\n• Non-alliance external servers' },
+    );
+
+  const tier2 = new EmbedBuilder()
+    .setColor(0x5865F2)
+    .setTitle('⚔️ Tier 2 — Kion Officers')
+    .addFields(
+      { name: 'Monday — Tower War Lead', value: '• Signups, reminders, roster' },
+      { name: 'NowhereMan — Internal Health', value: '• Morale, engagement, feedback\n• Runs internal clan-only activities' },
+      { name: 'Ynaguinid — External Events + Immortal', value: '• Schedules events with other clans (after war calendar)\n• Immortal activities contact' },
+    );
+
+  const tier3 = new EmbedBuilder()
+    .setColor(0x57F287)
+    .setTitle('🎉 Tier 3 — Community & Recruitment')
+    .addFields(
+      { name: 'Manawari — Discord Ops + Bot Monitoring', value: '• Discord moderation + activity\n• Event facilitation\n• Bot suggestions/bugs → Clan Leader' },
+      { name: 'xIcy — Recruitment + In-Game Reminders', value: '• Recruitment + social media\n• Shadow War in-game reminders (lineup from Leader)' },
+      { name: 'Nalimotko — Event Prizes', value: '• Prize pool + winner records' },
+      { name: 'Nutristar — In-Game Behavior + Backup', value: '• Monitors in-game behavior, factions\n• Backup for Nalimotko' },
+    );
+
+  const flows = new EmbedBuilder()
+    .setColor(0x99AAB5)
+    .setTitle('🔄 Workflows & Monitoring')
+    .addFields(
+      { name: 'Shadow War', value: 'Menelaus drafts → 👑 Leader approves → xIcy reminds in-game → Pandapple/Pau execute → Pau logs attendance' },
+      { name: 'External Events', value: 'Ynaguinid schedules → Manawari runs → Nalimotko prizes' },
+      { name: 'Internal Events', value: 'NowhereMan runs → Manawari facilitates → Nalimotko (if prizes)' },
+      { name: 'Who Watches What', value: '• War attendance → **Pau**\n• Morale/engagement → **NowhereMan**\n• Discord activity → **Manawari**\n• In-game behavior → **Nutristar**' },
+    )
+    .setFooter({ text: 'Zeus Clan | SEA Bloodraven | Diablo Immortal' })
+    .setTimestamp();
+
+  return interaction.reply({ embeds: [header, tier1, tier2, tier3, flows] });
+}
+
 // ─── ATTENDANCE: EVENT-START CRON ────────────────────────────────────────────
 function scheduleAttendanceCheckIns() {
   // Shadow War: Thu & Sat at 19:30 PHT
@@ -1073,10 +1125,15 @@ async function registerSlashCommands() {
       new SlashCommandBuilder()
         .setName('activity')
         .setDescription('Officer-only chat activity report for the current cycle'),
+
+      // ── /officers — post officer roles + responsibilities embed ──────────
+      new SlashCommandBuilder()
+        .setName('officers')
+        .setDescription('Post the Zeus Clan officer roles and responsibilities'),
     ];
 
     await client.application.commands.set(commands);
-    console.log('✅ Slash commands registered: /announce, /setup, /cycle-start, /cycle-status, /leaderboard, /cycle-end, /activity');
+    console.log('✅ Slash commands registered: /announce, /setup, /cycle-start, /cycle-status, /leaderboard, /cycle-end, /activity, /officers');
   } catch (err) {
     console.error('[Slash Commands] Error registering:', err);
   }
