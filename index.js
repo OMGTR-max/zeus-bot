@@ -1136,6 +1136,13 @@ async function registerSlashCommands() {
     const guild = client.guilds.cache.get(guildId);
     if (guild) {
       await guild.commands.set(commands);
+      // Purge any leftover global commands so Discord doesn't show duplicates
+      // (e.g. /setup and /activity appearing twice from a prior global push).
+      try {
+        await client.application.commands.set([]);
+      } catch (e) {
+        console.log('[Slash Commands] Could not clear global commands:', e.message);
+      }
       console.log(`✅ Slash commands registered to guild ${guild.name} (instant): /announce, /setup, /cycle-start, /cycle-status, /leaderboard, /cycle-end, /activity, /officers`);
     } else {
       await client.application.commands.set(commands);
