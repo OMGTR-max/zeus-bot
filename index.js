@@ -464,6 +464,7 @@ client.on(Events.InteractionCreate, async interaction => {
     if (interaction.commandName === 'cycle-end')    return handleCycleEndCommand(interaction);
     if (interaction.commandName === 'cycle-start')  return handleCycleStartCommand(interaction);
     if (interaction.commandName === 'cycle-status') return handleCycleStatusCommand(interaction);
+    if (interaction.commandName === 'activity')     return handleActivityCommand(interaction);
   }
 
   // ── Modal submission (not used in announce anymore, but kept for future) ────
@@ -864,6 +865,48 @@ client.on(Events.MessageReactionAdd, (reaction, user) => {
   attendance.handleCheckInReaction(reaction, user);
 });
 
+// ─── CHAT ACTIVITY (silent, officer-only signal) ─────────────────────────────
+client.on(Events.MessageCreate, msg => {
+  if (msg.author?.bot) return;
+  if (!msg.guild) return;
+  // Skip slash command interactions; those don't fire MessageCreate anyway,
+  // but $-prefix commands do. Track them as activity — using the bot is
+  // engagement.
+  attendance.recordChatMessage(msg.author.id, msg.channel.id);
+});
+
+async function handleActivityCommand(interaction) {
+  if (!isAttendanceAdmin(interaction)) {
+    return interaction.reply({ content: '❌ Officer/Admin only.', ephemeral: true });
+  }
+  const cfg = attendance.loadConfig();
+  const report = attendance.getActivityReport(interaction.guild, cfg.officerRoleIds);
+  if (!report || report.length === 0) {
+    return interaction.reply({
+      content: '📊 No chat activity recorded this cycle. (Cycle may not be active.)',
+      ephemeral: true,
+    });
+  }
+  const lines = report.slice(0, 30).map((e, i) => {
+    const off  = e.isOfficer ? ' *(officer)*' : '';
+    const last = e.lastMessage
+      ? moment(e.lastMessage).tz(attendance.TIMEZONE).fromNow()
+      : '—';
+    return `\`${String(i + 1).padStart(2)}\` **${e.username}** — ${e.count} msgs (last: ${last})${off}`;
+  });
+  const total = report.reduce((s, e) => s + e.count, 0);
+  return interaction.reply({
+    embeds: [zeusEmbed(
+      'Chat Activity — Officer View',
+      `Showing **${Math.min(30, report.length)}** of **${report.length}** active members ` +
+      `(${total} total messages this cycle).\n\n` +
+      lines.join('\n') +
+      `\n\n*This view is officer-only and never shown publicly. Used as a soft engagement signal alongside attendance.*`
+    )],
+    ephemeral: true,
+  });
+}
+
 // ─── ATTENDANCE: EVENT-START CRON ────────────────────────────────────────────
 function scheduleAttendanceCheckIns() {
   // Shadow War: Thu & Sat at 19:30 PHT
@@ -1025,10 +1068,15 @@ async function registerSlashCommands() {
       new SlashCommandBuilder()
         .setName('cycle-end')
         .setDescription('Close the current cycle, assign awards, archive results'),
+
+      // ── /activity — officer-only chat activity report ────────────────────
+      new SlashCommandBuilder()
+        .setName('activity')
+        .setDescription('Officer-only chat activity report for the current cycle'),
     ];
 
     await client.application.commands.set(commands);
-    console.log('✅ Slash commands registered: /announce, /setup, /cycle-start, /cycle-status, /leaderboard, /cycle-end');
+    console.log('✅ Slash commands registered: /announce, /setup, /cycle-start, /cycle-status, /leaderboard, /cycle-end, /activity');
   } catch (err) {
     console.error('[Slash Commands] Error registering:', err);
   }
