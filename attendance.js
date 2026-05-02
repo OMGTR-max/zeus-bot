@@ -22,7 +22,7 @@ const EVENT_DEFINITIONS = {
     endTime:   '21:00',
   },
   vob: {
-    name: 'Vault of the Blacksmith',
+    name: 'Vigil of Blades',
     icon: '🛡️',
     days: [0],        // Sunday
     startTime: '19:55',
