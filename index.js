@@ -15,7 +15,8 @@ const axios  = require('axios');
 const cheerio = require('cheerio');
 const fs     = require('fs');
 const path   = require('path');
-const stats  = require('./stats');
+const stats      = require('./stats');
+const attendance = require('./attendance');
 
 const TIMEZONE = 'Asia/Manila';
 const PREFIX   = '$';
@@ -113,9 +114,10 @@ const client = new Client({
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildVoiceStates,
+    GatewayIntentBits.GuildMessageReactions,
     GatewayIntentBits.DirectMessages,
   ],
-  partials: ['CHANNEL'],
+  partials: ['CHANNEL', 'MESSAGE', 'REACTION'],
 });
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
@@ -162,7 +164,7 @@ function getStronkMention(guild) {
 }
 
 // ─── ANNOUNCEMENT HANDLER (shared by slash command modal) ─────────────────────
-async function postAnnouncement(interaction, type, title, message, section1, section2, section3) {
+async function postAnnouncement(interaction, type, title, message, section1, section2, section3, targetChannel = null) {
   // ──────────────────────────────────────────────────────────────
   // 1. PERMISSION CHECK
   // ──────────────────────────────────────────────────────────────
@@ -261,10 +263,22 @@ async function postAnnouncement(interaction, type, title, message, section1, sec
   // ──────────────────────────────────────────────────────────────
   // 5. SEND TO ANNOUNCEMENT CHANNEL
   // ──────────────────────────────────────────────────────────────
-  const announcementChannel = getChannel(interaction.guild, CONFIG.announcementChannelName);
+  // Use the channel option if provided, otherwise fall back to #clan-announcements
+  let announcementChannel = targetChannel;
   if (!announcementChannel) {
+    announcementChannel = getChannel(interaction.guild, CONFIG.announcementChannelName);
+  }
+  if (!announcementChannel || !announcementChannel.isTextBased?.()) {
     return interaction.reply({
-      content: '❌ `#clan-announcements` channel not found.',
+      content: '❌ Target channel not found or not a text channel.',
+      ephemeral: true
+    });
+  }
+  // Verify the bot can send in the chosen channel
+  const me = interaction.guild.members.me;
+  if (me && !announcementChannel.permissionsFor(me)?.has('SendMessages')) {
+    return interaction.reply({
+      content: `❌ I don't have permission to send messages in <#${announcementChannel.id}>.`,
       ephemeral: true
     });
   }
@@ -433,16 +447,23 @@ client.on(Events.InteractionCreate, async interaction => {
   // ── Roster pagination buttons ─────────────────────────────────────────────
   if (await stats.handleRosterButton(interaction)) return;
 
-  // ── Slash command: /announce ──────────────────────────────────────────────
-  if (interaction.isCommand && interaction.commandName === 'announce') {
-    const type = interaction.options.getString('type');
-    const title = interaction.options.getString('title');
-    const message = interaction.options.getString('message');
-    const section1 = interaction.options.getString('section-1');
-    const section2 = interaction.options.getString('section-2');
-    const section3 = interaction.options.getString('section-3');
-
-    return postAnnouncement(interaction, type, title, message, section1, section2, section3);
+  // ── Slash command dispatch ────────────────────────────────────────────────
+  if (interaction.isChatInputCommand?.() || interaction.isCommand) {
+    if (interaction.commandName === 'announce') {
+      const type     = interaction.options.getString('type');
+      const title    = interaction.options.getString('title');
+      const message  = interaction.options.getString('message');
+      const section1 = interaction.options.getString('section-1');
+      const section2 = interaction.options.getString('section-2');
+      const section3 = interaction.options.getString('section-3');
+      const channel  = interaction.options.getChannel('channel');
+      return postAnnouncement(interaction, type, title, message, section1, section2, section3, channel);
+    }
+    if (interaction.commandName === 'setup')        return handleSetupCommand(interaction);
+    if (interaction.commandName === 'leaderboard')  return handleLeaderboardCommand(interaction);
+    if (interaction.commandName === 'cycle-end')    return handleCycleEndCommand(interaction);
+    if (interaction.commandName === 'cycle-start')  return handleCycleStartCommand(interaction);
+    if (interaction.commandName === 'cycle-status') return handleCycleStatusCommand(interaction);
   }
 
   // ── Modal submission (not used in announce anymore, but kept for future) ────
@@ -638,6 +659,234 @@ async function checkForNewPatch(guild) {
   }
 }
 
+// ─── ATTENDANCE: SLASH COMMAND HANDLERS ──────────────────────────────────────
+const ATTENDANCE_ADMIN_ROLES = ['Officer', 'Admin'];
+
+function isAttendanceAdmin(interaction) {
+  return interaction.member?.roles?.cache?.some(r =>
+    ATTENDANCE_ADMIN_ROLES.includes(r.name)
+  );
+}
+
+async function handleSetupCommand(interaction) {
+  if (!isAttendanceAdmin(interaction)) {
+    return interaction.reply({
+      content: '❌ Only **Officers** and **Admins** can run `/setup`.',
+      ephemeral: true,
+    });
+  }
+  const cfg = attendance.loadConfig();
+  const opts = interaction.options;
+
+  const warVoice    = opts.getChannel('war-voice');
+  const checkInCh   = opts.getChannel('checkin-channel');
+  const lbCh        = opts.getChannel('leaderboard-channel');
+  const mvpRole     = opts.getRole('mvp-role');
+  const stormRole   = opts.getRole('storm-bearer-role');
+  const lightRole   = opts.getRole('lightning-striker-role');
+  const veteranRole = opts.getRole('veteran-role');
+  const officerRole = opts.getRole('officer-role');
+
+  if (warVoice)    cfg.warVoiceChannelId    = warVoice.id;
+  if (checkInCh)   cfg.checkInChannelId     = checkInCh.id;
+  if (lbCh)        cfg.leaderboardChannelId = lbCh.id;
+  if (mvpRole)     cfg.awardRoles.mvp              = mvpRole.id;
+  if (stormRole)   cfg.awardRoles.stormBearer      = stormRole.id;
+  if (lightRole)   cfg.awardRoles.lightningStriker = lightRole.id;
+  if (veteranRole) cfg.awardRoles.veteran          = veteranRole.id;
+  if (officerRole) {
+    if (!cfg.officerRoleIds.includes(officerRole.id)) {
+      cfg.officerRoleIds.push(officerRole.id);
+    }
+  }
+  attendance.saveConfig(cfg);
+
+  const fmt = (id, type) => id ? `<#${id}>` : '`(unset)`';
+  const fmtRole = id => id ? `<@&${id}>` : '`(unset)`';
+  const officerList = cfg.officerRoleIds.length
+    ? cfg.officerRoleIds.map(id => `<@&${id}>`).join(', ')
+    : '`(none)`';
+
+  const embed = zeusEmbed(
+    'Attendance Setup',
+    `**Channels**\n` +
+    `• War voice: ${fmt(cfg.warVoiceChannelId)}\n` +
+    `• Check-in: ${fmt(cfg.checkInChannelId)}\n` +
+    `• Leaderboard: ${fmt(cfg.leaderboardChannelId)}\n\n` +
+    `**Award roles**\n` +
+    `🥇 MVP: ${fmtRole(cfg.awardRoles.mvp)}\n` +
+    `🥈 Storm Bearer: ${fmtRole(cfg.awardRoles.stormBearer)}\n` +
+    `🥉 Lightning Striker: ${fmtRole(cfg.awardRoles.lightningStriker)}\n` +
+    `🏛️ Veteran of Zeus: ${fmtRole(cfg.awardRoles.veteran)}\n\n` +
+    `**Officer roles (excluded from member awards)**\n${officerList}\n\n` +
+    `Run \`/setup\` again to update any field.`
+  );
+  return interaction.reply({ embeds: [embed], ephemeral: true });
+}
+
+async function handleCycleStartCommand(interaction) {
+  if (!isAttendanceAdmin(interaction)) {
+    return interaction.reply({ content: '❌ Officer/Admin only.', ephemeral: true });
+  }
+  const existing = attendance.getCurrentCycle();
+  if (existing) {
+    return interaction.reply({
+      content: `⚠️ A cycle is already active (\`${existing.cycleId}\`). Run \`/cycle-end\` first.`,
+      ephemeral: true,
+    });
+  }
+  const faction   = interaction.options.getString('faction');
+  const startDate = interaction.options.getString('start-date');
+  let state;
+  try {
+    state = attendance.startCycle(faction, startDate || null);
+  } catch (e) {
+    return interaction.reply({ content: `❌ ${e.message}`, ephemeral: true });
+  }
+  const start = moment(state.startDate).tz(attendance.TIMEZONE).format('MMM DD, YYYY');
+  return interaction.reply({
+    embeds: [zeusEmbed(
+      'Cycle Started ⚡',
+      `**Faction:** ${faction.toUpperCase()}\n` +
+      `**Start date:** ${start}\n` +
+      `**Duration:** 7 weeks\n\n` +
+      (faction === 'shadows'
+        ? '**Tracked events:** Shadow War (Thu/Sat, all 7 weeks) + VoB (Sun, weeks 1–3)'
+        : '**Tracked events:** VoB (Sun, weeks 1–3 only)') +
+      `\n\nGood luck, Zeus Clan! ⚔️`
+    )],
+  });
+}
+
+async function handleCycleStatusCommand(interaction) {
+  const state = attendance.getCurrentCycle();
+  if (!state) {
+    return interaction.reply({
+      content: '⚠️ No active cycle. An officer can start one with `/cycle-start`.',
+      ephemeral: true,
+    });
+  }
+  const week = attendance.getCycleWeek(state, new Date()) || '—';
+  const max  = attendance.computeMaxEvents(state);
+  const my   = state.attendance[interaction.user.id];
+  const myCount = my ? my.count : 0;
+  const myPct   = max ? ((myCount / max) * 100).toFixed(0) : '0';
+
+  return interaction.reply({
+    embeds: [zeusEmbed(
+      `Cycle Status — Week ${week} of ${state.durationWeeks}`,
+      `**Faction:** ${state.faction.toUpperCase()}\n` +
+      `**Started:** ${moment(state.startDate).tz(attendance.TIMEZONE).format('MMM DD, YYYY')}\n` +
+      `**Total events possible:** ${max}\n\n` +
+      `**Your attendance:** ${myCount}/${max} (${myPct}%)`
+    )],
+    ephemeral: true,
+  });
+}
+
+async function handleLeaderboardCommand(interaction) {
+  const state = attendance.getCurrentCycle();
+  if (!state) {
+    return interaction.reply({ content: '⚠️ No active cycle.', ephemeral: true });
+  }
+  const cfg = attendance.loadConfig();
+  const lb  = attendance.buildLeaderboard(state, cfg.officerRoleIds, interaction.guild);
+
+  if (lb.entries.length === 0) {
+    return interaction.reply({
+      content: '📊 No attendance recorded yet for this cycle.',
+      ephemeral: true,
+    });
+  }
+
+  const lines = lb.entries.slice(0, 25).map((e, i) => {
+    const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `\`${String(i + 1).padStart(2)}\``;
+    const off = e.isOfficer ? ' *(officer)*' : '';
+    const pct = e.percentage.toFixed(0);
+    return `${medal} **${e.username}** — ${e.count}/${lb.max} (${pct}%)${off}`;
+  });
+
+  return interaction.reply({
+    embeds: [zeusEmbed(
+      `Attendance Leaderboard — Week ${attendance.getCycleWeek(state, new Date()) || '—'}`,
+      lines.join('\n') + `\n\n*Officers are tracked but excluded from member awards.*`
+    )],
+  });
+}
+
+async function handleCycleEndCommand(interaction) {
+  if (!isAttendanceAdmin(interaction)) {
+    return interaction.reply({ content: '❌ Officer/Admin only.', ephemeral: true });
+  }
+  const state = attendance.getCurrentCycle();
+  if (!state) {
+    return interaction.reply({ content: '⚠️ No active cycle to end.', ephemeral: true });
+  }
+
+  await interaction.deferReply();
+  const result = await attendance.endCycle(interaction.guild);
+  if (result.error) {
+    return interaction.editReply({ content: `❌ ${result.error}` });
+  }
+
+  const { winners, leaderboard, faction } = result;
+  const fmtWinner = (w) => w
+    ? `**${w.username}** — ${w.count}/${leaderboard.max} (${w.percentage.toFixed(0)}%)${w.becameVeteran ? ' 🏛️ *Veteran of Zeus*' : ''}`
+    : '*(no eligible member)*';
+
+  const summary =
+    `**Faction:** ${faction.toUpperCase()}\n` +
+    `**Total events:** ${leaderboard.max}\n` +
+    `**Members tracked:** ${leaderboard.entries.length}\n\n` +
+    `🥇 **Cycle MVP** — ${fmtWinner(winners.mvp)}\n` +
+    `🥈 **Storm Bearer** — ${fmtWinner(winners.stormBearer)}\n` +
+    `🥉 **Lightning Striker** — ${fmtWinner(winners.lightningStriker)}\n\n` +
+    `Cycle archived. Start the next one with \`/cycle-start\`. ⚡`;
+
+  const cfg = attendance.loadConfig();
+  if (cfg.leaderboardChannelId) {
+    try {
+      const ch = await client.channels.fetch(cfg.leaderboardChannelId);
+      if (ch?.isTextBased?.()) {
+        await ch.send({ embeds: [zeusEmbed('🏆 Cycle Complete', summary)] });
+      }
+    } catch {}
+  }
+  return interaction.editReply({ embeds: [zeusEmbed('Cycle Closed ⚡', summary)] });
+}
+
+// ─── ATTENDANCE: VOICE & REACTION LISTENERS ──────────────────────────────────
+client.on(Events.VoiceStateUpdate, (oldState, newState) => {
+  attendance.handleVoiceStateUpdate(oldState, newState);
+});
+
+client.on(Events.MessageReactionAdd, (reaction, user) => {
+  attendance.handleCheckInReaction(reaction, user);
+});
+
+// ─── ATTENDANCE: EVENT-START CRON ────────────────────────────────────────────
+function scheduleAttendanceCheckIns() {
+  // Shadow War: Thu & Sat at 19:30 PHT
+  cron.schedule('30 19 * * 4,6', () => {
+    const state = attendance.getCurrentCycle();
+    if (!state || state.faction !== 'shadows') return;
+    attendance.postCheckInMessage(client, 'shadow_war').catch(e =>
+      console.log('[Attendance] check-in post error:', e.message)
+    );
+  }, { timezone: TIMEZONE });
+
+  // VoB: Sunday at 20:00 PHT (only weeks 1-3 — postCheckInMessage validates)
+  cron.schedule('0 20 * * 0', () => {
+    const state = attendance.getCurrentCycle();
+    if (!state) return;
+    attendance.postCheckInMessage(client, 'vob').catch(e =>
+      console.log('[Attendance] check-in post error:', e.message)
+    );
+  }, { timezone: TIMEZONE });
+
+  console.log('✅ Attendance check-in cron scheduled (Thu/Sat 19:30 + Sun 20:00 PHT)');
+}
+
 // ─── READY ────────────────────────────────────────────────────────────────────
 client.once('ready', () => {
   console.log(`\n⚡ Zeus Bot v3.0 online! Logged in as ${client.user.tag}`);
@@ -649,6 +898,7 @@ client.once('ready', () => {
   // Patch Tracker disabled — Blizzard RSS feed produces stale/delayed
   // posts. Re-enable by uncommenting the line below.
   // schedulePatchTracker();
+  scheduleAttendanceCheckIns();
   registerSlashCommands();
 });
 
@@ -706,11 +956,76 @@ async function registerSlashCommands() {
             .setDescription('Optional section 3')
             .setRequired(false)
             .setMaxLength(1024)
+        )
+        .addChannelOption(option =>
+          option
+            .setName('channel')
+            .setDescription('Target channel (default: #clan-announcements)')
+            .setRequired(false)
         ),
+
+      // ── /setup — configure attendance tracker (Officer/Admin only) ────────
+      new SlashCommandBuilder()
+        .setName('setup')
+        .setDescription('Configure attendance tracker channels and award roles')
+        .addChannelOption(o =>
+          o.setName('war-voice').setDescription('Voice channel monitored during wars').setRequired(false)
+        )
+        .addChannelOption(o =>
+          o.setName('checkin-channel').setDescription('Where check-in messages are posted').setRequired(false)
+        )
+        .addChannelOption(o =>
+          o.setName('leaderboard-channel').setDescription('Where /cycle-end posts results').setRequired(false)
+        )
+        .addRoleOption(o =>
+          o.setName('mvp-role').setDescription('Role granted to Cycle MVP (1st)').setRequired(false)
+        )
+        .addRoleOption(o =>
+          o.setName('storm-bearer-role').setDescription('Role granted to Storm Bearer (2nd)').setRequired(false)
+        )
+        .addRoleOption(o =>
+          o.setName('lightning-striker-role').setDescription('Role granted to Lightning Striker (3rd)').setRequired(false)
+        )
+        .addRoleOption(o =>
+          o.setName('veteran-role').setDescription('Permanent role for 3 consecutive top-3 cycles').setRequired(false)
+        )
+        .addRoleOption(o =>
+          o.setName('officer-role').setDescription('Officer role excluded from member awards').setRequired(false)
+        ),
+
+      // ── /cycle-start — begin a new 7-week cycle ──────────────────────────
+      new SlashCommandBuilder()
+        .setName('cycle-start')
+        .setDescription('Start a new 7-week attendance cycle')
+        .addStringOption(o =>
+          o.setName('faction').setDescription('Zeus faction this cycle').setRequired(true)
+            .addChoices(
+              { name: '🌑 Shadows',    value: 'shadows' },
+              { name: '👑 Immortals',  value: 'immortals' }
+            )
+        )
+        .addStringOption(o =>
+          o.setName('start-date').setDescription('YYYY-MM-DD (defaults to today)').setRequired(false)
+        ),
+
+      // ── /cycle-status — view current cycle state ─────────────────────────
+      new SlashCommandBuilder()
+        .setName('cycle-status')
+        .setDescription('Show the current cycle progress and your attendance'),
+
+      // ── /leaderboard — show standings ────────────────────────────────────
+      new SlashCommandBuilder()
+        .setName('leaderboard')
+        .setDescription('Show the current attendance leaderboard'),
+
+      // ── /cycle-end — close cycle, assign awards (Officer/Admin only) ─────
+      new SlashCommandBuilder()
+        .setName('cycle-end')
+        .setDescription('Close the current cycle, assign awards, archive results'),
     ];
 
     await client.application.commands.set(commands);
-    console.log('✅ Slash commands registered: /announce');
+    console.log('✅ Slash commands registered: /announce, /setup, /cycle-start, /cycle-status, /leaderboard, /cycle-end');
   } catch (err) {
     console.error('[Slash Commands] Error registering:', err);
   }
