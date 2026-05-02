@@ -921,7 +921,7 @@ async function handleOfficersCommand(interaction) {
     .addFields(
       { name: 'Menelaus — Clan Relations + Bot Ops', value: '• Alliance contact + internal affairs\n• Drafts Shadow War / VoB lineup\n• Day-to-day bot operations' },
       { name: 'Pandapple — War Captain + External Comms', value: '• War lineup execution in-game\n• Daily alliance / bzap server contact' },
-      { name: 'Paunginoon — War Captain + Attendance', value: '• War lineup execution in-game\n• War attendance + roster (sole owner)' },
+      { name: 'Paunginoon — War Captain + Attendance', value: '• War lineup execution in-game\n• War attendance + roster' },
       { name: 'ATL — External Comms (Backup)', value: '• Backup alliance liaison\n• Non-alliance external servers' },
     );
 
@@ -941,7 +941,7 @@ async function handleOfficersCommand(interaction) {
       { name: 'Manawari — Discord Ops + Bot Monitoring', value: '• Discord moderation + activity\n• Event facilitation\n• Bot suggestions/bugs → Clan Leader' },
       { name: 'xIcy — Recruitment + In-Game Reminders', value: '• Recruitment + social media\n• Shadow War in-game reminders (lineup from Leader)' },
       { name: 'Nalimotko — Event Prizes', value: '• Prize pool + winner records' },
-      { name: 'Nutristar — In-Game Behavior + Backup', value: '• Monitors in-game behavior, factions\n• Backup for Nalimotko' },
+      { name: 'AkosiMK — Stats + Roster Backup', value: '• Manual stat updates (backup for `$updatemystats`)\n• Roster co-maintenance with Pau\n• Periodic stat audits / drift checks' },
     );
 
   const flows = new EmbedBuilder()
@@ -951,7 +951,7 @@ async function handleOfficersCommand(interaction) {
       { name: 'Shadow War', value: 'Menelaus drafts → 👑 Leader approves → xIcy reminds in-game → Pandapple/Pau execute → Pau logs attendance' },
       { name: 'External Events', value: 'Ynaguinid schedules → Manawari runs → Nalimotko prizes' },
       { name: 'Internal Events', value: 'NowhereMan runs → Manawari facilitates → Nalimotko (if prizes)' },
-      { name: 'Who Watches What', value: '• War attendance → **Pau**\n• Morale/engagement → **NowhereMan**\n• Discord activity → **Manawari**\n• In-game behavior → **Nutristar**' },
+      { name: 'Who Watches What', value: '• War attendance → **Pau**\n• Morale/engagement → **NowhereMan**\n• Discord activity → **Manawari**\n• In-game behavior → 👑 **Leader**\n• Stats / roster → **AkosiMK** (with Pau)' },
     )
     .setFooter({ text: 'Zeus Clan | SEA Bloodraven | Diablo Immortal' })
     .setTimestamp();

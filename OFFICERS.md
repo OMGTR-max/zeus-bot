@@ -28,7 +28,7 @@ flowchart TD
         Mana["Manawari<br/>Discord Ops<br/>+ Bot Monitoring"]
         xIcy["xIcy<br/>Recruitment<br/>+ In-Game Reminders"]
         Nali["Nalimotko<br/>Event Prizes"]
-        Nutri["Nutristar<br/>In-Game Behavior<br/>+ Prize Backup"]
+        Akosi["AkosiMK<br/>Stats + Roster<br/>Backup"]
     end
 
     Leader --> Menelaus
@@ -43,7 +43,7 @@ flowchart TD
     Pandapple --> Mana
     Pandapple --> xIcy
     Pau --> Nali
-    Pau --> Nutri
+    Pau --> Akosi
 ```
 
 ---
@@ -55,6 +55,8 @@ flowchart TD
 - [ ] Receives lineup from Menelaus → forwards to xIcy for in-game reminders
 - [ ] Bot owner of record (delegates day-to-day to Menelaus)
 - [ ] Receives bug reports from Manawari
+- [ ] Monitor in-game behavior, relationships, factions
+- [ ] Backup for Nalimotko on prize coordination
 
 ### Menelaus — Clan Relations + Bot Owner
 - [ ] Maintain alliance contact + internal affairs
@@ -70,8 +72,8 @@ flowchart TD
 
 ### Paunginoon — War Captain + Attendance
 - [ ] War captain duties (lineup execution in-game)
-- [ ] Track war attendance (sole owner)
-- [ ] Maintain war roster
+- [ ] Track war attendance
+- [ ] Maintain war roster (with AkosiMK)
 - [ ] Escalate no-shows / repeat absences
 
 ### ATL — External Comms (Backup / Specialty)
@@ -116,9 +118,10 @@ flowchart TD
 - [ ] Manage event prize pool
 - [ ] Record winners (event log)
 
-### Nutristar — In-Game Behavior + Prize Backup
-- [ ] Monitor in-game behavior, relationships, factions
-- [ ] Backup Nalimotko on prize coordination
+### AkosiMK — Stats + Roster Backup
+- [ ] Manual stat updates (backup for Discord `$updatemystats`)
+- [ ] Roster co-maintenance with Pau
+- [ ] Periodic stat audits / drift checks against in-game
 
 ---
 
@@ -144,7 +147,7 @@ flowchart TD
         E1[Ynaguinid<br/>schedules + contacts external clans]
         E2[Manawari<br/>runs event on the day]
         E3[Nalimotko<br/>handles prizes]
-        E4[Nutristar<br/>backup + records]
+        E4[👑 Leader<br/>prize backup]
         E1 --> E2 --> E3 --> E4
     end
 
@@ -162,7 +165,7 @@ flowchart TD
 | Scheduling | After regular war calendar | Anytime, around clan health |
 | Outside contact | Yes (other clans) | No |
 | Discord facilitation | Manawari | Manawari |
-| Prizes | Nalimotko (Nutristar backup) | Nalimotko (if applicable) |
+| Prizes | Nalimotko (👑 Leader backup) | Nalimotko (if applicable) |
 
 ---
 
@@ -172,10 +175,11 @@ To avoid four officers stepping on each other:
 
 | Officer | Monitors |
 |---|---|
-| Paunginoon | War attendance only |
+| Paunginoon | War attendance |
+| AkosiMK | Stats accuracy + roster (with Pau) |
 | NowhereMan | Morale / engagement / feedback |
 | Manawari | Discord activity |
-| Nutristar | In-game behavior, relationships, factions |
+| 👑 Leader | In-game behavior, relationships, factions |
 
 ---
 
@@ -202,3 +206,4 @@ To avoid four officers stepping on each other:
 ---
 
 *Last reviewed: 2026-05-02*
+
