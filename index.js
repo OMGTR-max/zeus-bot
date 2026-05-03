@@ -33,6 +33,43 @@ const CONFIG = {
 // Roles that can use /announce command
 const ALLOWED_ANNOUNCE_ROLES = ['Officer', 'Admin'];
 
+// Persistent ack/react tallies, keyed by announcement message ID.
+// Survives bot restarts so old announcements keep tallying.
+const ANNOUNCE_ACKS_FILE = path.join(__dirname, '.announce_acks.json');
+function loadAnnounceAcks() {
+  try {
+    if (fs.existsSync(ANNOUNCE_ACKS_FILE)) {
+      return JSON.parse(fs.readFileSync(ANNOUNCE_ACKS_FILE, 'utf8'));
+    }
+  } catch (e) {
+    console.log('[Announce] ack store load error:', e.message);
+  }
+  return {};
+}
+function saveAnnounceAcks(store) {
+  try {
+    fs.writeFileSync(ANNOUNCE_ACKS_FILE, JSON.stringify(store, null, 2));
+  } catch (e) {
+    console.log('[Announce] ack store save error:', e.message);
+  }
+}
+function recordAnnounceAck(messageId, userId, kind) {
+  const store = loadAnnounceAcks();
+  const entry = store[messageId] || { acks: [], reacts: [] };
+  const list  = kind === 'acknowledge' ? entry.acks : entry.reacts;
+  const already = list.includes(userId);
+  if (!already) list.push(userId);
+  store[messageId] = entry;
+  saveAnnounceAcks(store);
+  return { entry, already };
+}
+const ENGAGEMENT_FIELD_NAME = '📊 **ENGAGEMENT**';
+function buildEngagementValue(entry) {
+  const acks   = entry.acks?.length   || 0;
+  const reacts = entry.reacts?.length || 0;
+  return `✅ ${acks} acknowledged · 👍 ${reacts} reacted`;
+}
+
 // Banner image URL (Imgur-hosted Zeus Clan welcome banner)
 const BANNER_URL = 'https://i.imgur.com/STS2CwI.png';
 
@@ -443,15 +480,36 @@ client.on(Events.InteractionCreate, async interaction => {
         ALLOWED_ANNOUNCE_ROLES.includes(r.name)
       );
 
-      if (action === 'acknowledge') {
+      if (action === 'acknowledge' || action === 'react') {
+        const { entry, already } = recordAnnounceAck(interaction.message.id, user.id, action);
+
+        // Update the engagement field on the original embed.
+        try {
+          const msg = interaction.message;
+          const original = msg.embeds[0];
+          if (original) {
+            const updated = EmbedBuilder.from(original);
+            const fields = original.fields || [];
+            const idx = fields.findIndex(f => f.name === ENGAGEMENT_FIELD_NAME);
+            const newField = { name: ENGAGEMENT_FIELD_NAME, value: buildEngagementValue(entry), inline: false };
+            if (idx >= 0) {
+              const next = [...fields];
+              next[idx] = newField;
+              updated.setFields(next);
+            } else {
+              updated.addFields(newField);
+            }
+            await msg.edit({ embeds: [updated, ...msg.embeds.slice(1)], components: msg.components });
+          }
+        } catch (e) {
+          console.log('[Announce] could not update engagement field:', e.message);
+        }
+
+        const verb = action === 'acknowledge' ? 'acknowledged' : 'reacted to';
+        const icon = action === 'acknowledge' ? '✅' : '👍';
+        const note = already ? ' (already counted)' : '';
         return interaction.reply({
-          content: `✅ You acknowledged this announcement.`,
-          ephemeral: true,
-        });
-      }
-      if (action === 'react') {
-        return interaction.reply({
-          content: `👍 You reacted to this announcement.`,
+          content: `${icon} You ${verb} this announcement.${note}`,
           ephemeral: true,
         });
       }
@@ -462,7 +520,15 @@ client.on(Events.InteractionCreate, async interaction => {
             ephemeral: true,
           });
         }
+        const deletedId = interaction.message.id;
         await interaction.message.delete();
+        try {
+          const store = loadAnnounceAcks();
+          if (store[deletedId]) {
+            delete store[deletedId];
+            saveAnnounceAcks(store);
+          }
+        } catch {}
         return interaction.reply({
           content: '🗑️ Announcement deleted.',
           ephemeral: true,
