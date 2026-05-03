@@ -445,14 +445,14 @@ client.on(Events.InteractionCreate, async interaction => {
 
       if (action === 'acknowledge') {
         return interaction.reply({
-          content: `✅ ${user.username} acknowledged this announcement.`,
-          ephemeral: false,
+          content: `✅ You acknowledged this announcement.`,
+          ephemeral: true,
         });
       }
       if (action === 'react') {
         return interaction.reply({
-          content: `👍 ${user.username} reacted to this announcement.`,
-          ephemeral: false,
+          content: `👍 You reacted to this announcement.`,
+          ephemeral: true,
         });
       }
       if (action === 'delete') {
