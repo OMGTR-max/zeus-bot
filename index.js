@@ -295,52 +295,9 @@ async function postAnnouncement(interaction, type, title, message, section1, sec
       ephemeral: true
     });
 
-    // ──────────────────────────────────────────────────────────────
-    // 6. BUTTON INTERACTION COLLECTOR (24-hour lifetime)
-    // ──────────────────────────────────────────────────────────────
-    const filter = btn =>
-      btn.customId.startsWith('announce_') &&
-      btn.message.id === sentMessage.id;
-
-    const collector = sentMessage.createMessageComponentCollector({
-      filter,
-      time: 24 * 60 * 60 * 1000 // 24 hours
-    });
-
-    collector.on('collect', async btn => {
-      const [, action, authorId] = btn.customId.split('_');
-      const isAuthor = btn.user.id === authorId;
-      const isAdmin = btn.member.roles.cache.some(r =>
-        ALLOWED_ANNOUNCE_ROLES.includes(r.name)
-      );
-
-      if (action === 'acknowledge') {
-        await btn.reply({
-          content: `✅ ${btn.user.username} acknowledged this announcement.`,
-          ephemeral: false
-        });
-      }
-      else if (action === 'react') {
-        await btn.reply({
-          content: `👍 ${btn.user.username} reacted to this announcement.`,
-          ephemeral: false
-        });
-      }
-      else if (action === 'delete') {
-        if (!isAuthor && !isAdmin) {
-          return btn.reply({
-            content: '❌ Only the author or an admin can delete this announcement.',
-            ephemeral: true
-          });
-        }
-        await sentMessage.delete();
-        await btn.reply({
-          content: '🗑️ Announcement deleted.',
-          ephemeral: true
-        });
-        collector.stop();
-      }
-    });
+    // Button clicks are handled by the global InteractionCreate handler
+    // (announce_* branch). No per-message collector — collectors die on bot
+    // restart, leaving "This interaction failed" on old announcements.
 
   } catch (err) {
     console.error('[Announce] Error:', err);
@@ -477,8 +434,50 @@ client.on(Events.InteractionCreate, async interaction => {
   if (!interaction.isButton()) return;
   const { customId, user } = interaction;
 
-  // ── Skip announcement buttons (handled by collector) ──────────────────────
-  if (customId.startsWith('announce_')) return;
+  // ── Announcement buttons (acknowledge / react / delete) ───────────────────
+  if (customId.startsWith('announce_')) {
+    try {
+      const [, action, authorId] = customId.split('_');
+      const isAuthor = user.id === authorId;
+      const isAdmin  = interaction.member?.roles?.cache?.some(r =>
+        ALLOWED_ANNOUNCE_ROLES.includes(r.name)
+      );
+
+      if (action === 'acknowledge') {
+        return interaction.reply({
+          content: `✅ ${user.username} acknowledged this announcement.`,
+          ephemeral: false,
+        });
+      }
+      if (action === 'react') {
+        return interaction.reply({
+          content: `👍 ${user.username} reacted to this announcement.`,
+          ephemeral: false,
+        });
+      }
+      if (action === 'delete') {
+        if (!isAuthor && !isAdmin) {
+          return interaction.reply({
+            content: '❌ Only the author or an admin can delete this announcement.',
+            ephemeral: true,
+          });
+        }
+        await interaction.message.delete();
+        return interaction.reply({
+          content: '🗑️ Announcement deleted.',
+          ephemeral: true,
+        });
+      }
+    } catch (err) {
+      console.error('[Announce buttons] Error:', err);
+      if (!interaction.replied && !interaction.deferred) {
+        try {
+          await interaction.reply({ content: '❌ Action failed.', ephemeral: true });
+        } catch {}
+      }
+    }
+    return;
+  }
 
   if (!customId.startsWith('role_')) return;
 
