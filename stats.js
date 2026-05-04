@@ -726,7 +726,7 @@ async function showMyStats(message) {
         `✨ **Potency:** ${r[COL.POTENCY - 1]    || 'N/A'}\n` +
         `🔮 **Resistance:** ${r[COL.RESISTANCE - 1]  || 'N/A'}\n` +
         `━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-        `🕐 **Last Updated:** ${r[COL.LAST_UPDATED - 1] || 'Never'}\n\n` +
+        `🕐 **Last Updated:** ${r[COL.TIMESTAMP - 1] || 'Never'}\n\n` +
         `Use \`$updatestats\` to update anytime! ⚡`
       )
       .setThumbnail(message.author.displayAvatarURL())
@@ -769,7 +769,7 @@ async function getOtherStats(message, targetMember) {
         `✨ **Potency:** ${r[COL.POTENCY - 1]     || 'N/A'}\n` +
         `🔮 **Resistance:** ${r[COL.RESISTANCE - 1]   || 'N/A'}\n` +
         `━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-        `🕐 **Last Updated:** ${r[COL.LAST_UPDATED - 1] || 'Never'}`
+        `🕐 **Last Updated:** ${r[COL.TIMESTAMP - 1] || 'Never'}`
       )
       .setThumbnail(targetMember.user.displayAvatarURL())
       .setFooter({ text: THEME.footer })

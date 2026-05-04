@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const moment = require('moment-timezone');
 const { EmbedBuilder } = require('discord.js');
+const { safeReadJSON, atomicWriteJSONSync } = require('./persistence');
 
 const TIMEZONE = 'Asia/Manila';
 const CONFIG_FILE  = path.join(__dirname, '.attendance_config.json');
@@ -31,17 +32,6 @@ const EVENT_DEFINITIONS = {
 };
 
 // ─── PERSISTENCE ──────────────────────────────────────────────────────────────
-function loadConfig() {
-  try {
-    if (fs.existsSync(CONFIG_FILE)) {
-      return { ...defaultConfig(), ...JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')) };
-    }
-  } catch (e) {
-    console.log('[Attendance] config load error:', e.message);
-  }
-  return defaultConfig();
-}
-
 function defaultConfig() {
   return {
     warVoiceCategoryId: null,
@@ -57,40 +47,19 @@ function defaultConfig() {
   };
 }
 
-function saveConfig(cfg) {
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2));
+function loadConfig() {
+  return { ...defaultConfig(), ...safeReadJSON(CONFIG_FILE, {}) };
 }
+function saveConfig(cfg) { atomicWriteJSONSync(CONFIG_FILE, cfg); }
 
-function loadState() {
-  try {
-    if (fs.existsSync(STATE_FILE)) {
-      return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
-    }
-  } catch (e) {
-    console.log('[Attendance] state load error:', e.message);
-  }
-  return null;
-}
+function loadState() { return safeReadJSON(STATE_FILE, null); }
+function saveState(state) { atomicWriteJSONSync(STATE_FILE, state); }
 
-function saveState(state) {
-  fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
-}
-
-function loadHistory() {
-  try {
-    if (fs.existsSync(HISTORY_FILE)) {
-      return JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8'));
-    }
-  } catch (e) {
-    console.log('[Attendance] history load error:', e.message);
-  }
-  return [];
-}
-
+function loadHistory() { return safeReadJSON(HISTORY_FILE, []); }
 function appendHistory(cycleResult) {
   const history = loadHistory();
   history.push(cycleResult);
-  fs.writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 2));
+  atomicWriteJSONSync(HISTORY_FILE, history);
 }
 
 // ─── CYCLE MANAGEMENT ─────────────────────────────────────────────────────────
@@ -248,15 +217,19 @@ async function postCheckInMessage(client, eventKey) {
   const msg = await channel.send({ embeds: [embed] });
   try { await msg.react('🛡️'); } catch {}
 
+  // Re-load state after the await — a voice/reaction event during
+  // channel.send could have written to it, so don't clobber.
+  const fresh = loadState();
+  if (!fresh) return msg;
   const expiresAt = moment().tz(TIMEZONE).add(15, 'minutes').toISOString();
-  state.checkInMessages.push({
+  fresh.checkInMessages.push({
     messageId: msg.id,
     channelId: msg.channel.id,
     eventKey,
     eventDate,
     expiresAt,
   });
-  saveState(state);
+  saveState(fresh);
 
   setTimeout(() => closeCheckIn(msg.id), 15 * 60 * 1000);
   return msg;
@@ -289,6 +262,23 @@ function closeCheckIn(messageId) {
   if (idx === -1) return;
   state.checkInMessages.splice(idx, 1);
   saveState(state);
+}
+
+// Restore in-flight check-in close timers after a bot restart.
+// Fires immediately for any expired entry, re-arms timeouts for future ones.
+function rearmPendingCheckIns() {
+  const state = loadState();
+  if (!state || !Array.isArray(state.checkInMessages)) return;
+  const now = Date.now();
+  for (const c of [...state.checkInMessages]) {
+    const expiresMs = new Date(c.expiresAt).getTime();
+    const remaining = expiresMs - now;
+    if (remaining <= 0) {
+      closeCheckIn(c.messageId);
+    } else {
+      setTimeout(() => closeCheckIn(c.messageId), remaining);
+    }
+  }
 }
 
 // ─── CHAT ACTIVITY (officer-only signal, not a public competition) ──────────
@@ -330,7 +320,7 @@ function buildLeaderboard(state, officerRoleIds = [], guild = null) {
   const max = computeMaxEvents(state);
   const entries = Object.entries(state.attendance || {}).map(([userId, data]) => ({
     userId,
-    username: userId,
+    username: `<@${userId}>`,
     count: data.count,
     percentage: max ? (data.count / max) * 100 : 0,
     isOfficer: false,
@@ -445,4 +435,5 @@ module.exports = {
   endCycle,
   recordChatMessage,
   getActivityReport,
+  rearmPendingCheckIns,
 };
