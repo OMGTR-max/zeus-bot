@@ -1442,15 +1442,24 @@ client.on('messageCreate', async message => {
       `\`$getstats @user\` — View another member's stats (officers)\n` +
       `\`$roster\` — Full clan roster with pagination\n` +
       `\`$roster [class]\` — Filter roster by class\n\n` +
+      `**⚔️ Wars & Schedule**\n` +
       `\`$war\` — Countdown to next war\n` +
       `\`$schedule\` — Full weekly schedule\n` +
       `\`$signup\` — How to sign up\n\n` +
+      `**🏆 Cycle & Attendance**\n` +
+      `\`/cycle-status\` — Current cycle progress + your attendance\n` +
+      `\`/leaderboard\` — Current attendance standings\n` +
+      `\`/cycle-start\` — Start a new 7-week cycle (Officer+)\n` +
+      `\`/cycle-end\` — Close cycle, assign awards, archive (Officer+)\n` +
+      `\`/activity\` — Chat activity report (Officer+)\n` +
+      `\`/setup\` — Configure tracker channels + award roles (Admin)\n\n` +
       `**🎭 Roles**\n` +
       `\`$myroles\` — Open your private role menu (DM)\n` +
       `\`$roles\` — List available roles\n` +
       `\`$giverole @user [role]\` — Assign role (Admin)\n\n` +
-      `**📢 Announcements**\n` +
+      `**📢 Announcements & Officers**\n` +
       `\`/announce\` — Rich announcement with interactive buttons (Officer+)\n` +
+      `\`/officers\` — Post officer roles & responsibilities\n` +
       `\`$ping @role [msg]\` — Ping a role (Admin)\n` +
       `\`$checkpatch\` — Manual patch check (Admin)\n\n` +
       `**🛡️ Moderation**\n` +
