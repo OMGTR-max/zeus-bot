@@ -10,7 +10,7 @@ const {
   ActionRowBuilder, ButtonBuilder, ButtonStyle, Events, SlashCommandBuilder,
   ModalBuilder, TextInputBuilder, TextInputStyle, ChannelType
 } = require('discord.js');
-const { safeReadJSON, atomicWriteJSONSync } = require('./persistence');
+const { safeReadJSON, atomicWriteJSONSync, dataPath, DATA_DIR } = require('./persistence');
 const cron   = require('node-cron');
 const moment = require('moment-timezone');
 const axios  = require('axios');
@@ -34,7 +34,7 @@ const CONFIG = {
 // ─── ANNOUNCEMENT SYSTEM CONFIGURATION ─────────────────────────────────────────
 // Persistent ack/react tallies, keyed by announcement message ID.
 // Survives bot restarts so old announcements keep tallying.
-const ANNOUNCE_ACKS_FILE = path.join(__dirname, '.announce_acks.json');
+const ANNOUNCE_ACKS_FILE = dataPath('.announce_acks.json');
 function loadAnnounceAcks() { return safeReadJSON(ANNOUNCE_ACKS_FILE, {}); }
 function saveAnnounceAcks(store) {
   try { atomicWriteJSONSync(ANNOUNCE_ACKS_FILE, store); }
@@ -85,7 +85,7 @@ const ROLE_IDS = {
 
 // ─── PATCH TRACKER STATE ──────────────────────────────────────────────────────
 // Persists to disk so the bot doesn't re-announce the same patch after a restart
-const PATCH_CACHE_FILE = path.join(__dirname, '.patch_cache.json');
+const PATCH_CACHE_FILE = dataPath('.patch_cache.json');
 
 function loadPatchCache() {
   return safeReadJSON(PATCH_CACHE_FILE, { lastHash: null, lastTitle: null });
@@ -1052,6 +1052,7 @@ process.on('uncaughtException', (err) => {
 client.once('ready', () => {
   console.log(`\n⚡ Zeus Bot v3.0 online! Logged in as ${client.user.tag}`);
   console.log(`📅 Timezone: Asia/Manila (PHT)`);
+  console.log(`💾 Persisting state to: ${DATA_DIR}${process.env.DATA_DIR ? ' (volume)' : ' (ephemeral — set DATA_DIR for persistence!)'}`);
   console.log(`🆕 v3.1 Features: Slash command /announce with modal form | RSS Patch Tracker | DM Role Menu`);
   console.log(`✨ ENHANCED: Rich Announcement Embeds with Interactive Buttons\n`);
   client.user.setActivity('⚔️ Shadow War | /announce', { type: ActivityType.Playing });

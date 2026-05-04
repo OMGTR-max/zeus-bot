@@ -8,6 +8,16 @@ const path = require('path');
 
 const writeQueues = new Map();
 
+// Resolve persistent data path. On Railway/Render/Fly, mount a volume
+// and set DATA_DIR (e.g. DATA_DIR=/data) so JSON state survives redeploys.
+// Locally, falls back to the repo root next to index.js.
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname);
+try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch {}
+
+function dataPath(filename) {
+  return path.join(DATA_DIR, filename);
+}
+
 function safeReadJSON(filePath, fallback) {
   try {
     if (!fs.existsSync(filePath)) return fallback;
@@ -50,6 +60,8 @@ function queuedWriteJSON(filePath, dataFn) {
 }
 
 module.exports = {
+  DATA_DIR,
+  dataPath,
   safeReadJSON,
   atomicWriteJSONSync,
   queuedWriteJSON,

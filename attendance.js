@@ -6,12 +6,12 @@ const fs = require('fs');
 const path = require('path');
 const moment = require('moment-timezone');
 const { EmbedBuilder } = require('discord.js');
-const { safeReadJSON, atomicWriteJSONSync } = require('./persistence');
+const { safeReadJSON, atomicWriteJSONSync, dataPath } = require('./persistence');
 
 const TIMEZONE = 'Asia/Manila';
-const CONFIG_FILE  = path.join(__dirname, '.attendance_config.json');
-const STATE_FILE   = path.join(__dirname, '.attendance.json');
-const HISTORY_FILE = path.join(__dirname, '.attendance_history.json');
+const CONFIG_FILE  = dataPath('.attendance_config.json');
+const STATE_FILE   = dataPath('.attendance.json');
+const HISTORY_FILE = dataPath('.attendance_history.json');
 
 // Event window definitions (Asia/Manila local time)
 const EVENT_DEFINITIONS = {
