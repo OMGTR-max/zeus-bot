@@ -1049,7 +1049,7 @@ process.on('uncaughtException', (err) => {
 });
 
 // ─── READY ────────────────────────────────────────────────────────────────────
-client.once('ready', () => {
+client.once(Events.ClientReady, () => {
   console.log(`\n⚡ Zeus Bot v3.0 online! Logged in as ${client.user.tag}`);
   console.log(`📅 Timezone: Asia/Manila (PHT)`);
   console.log(`💾 Persisting state to: ${DATA_DIR}${process.env.DATA_DIR ? ' (volume)' : ' (ephemeral — set DATA_DIR for persistence!)'}`);
