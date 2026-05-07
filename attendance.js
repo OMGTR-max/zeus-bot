@@ -53,7 +53,53 @@ function loadConfig() {
 function saveConfig(cfg) { atomicWriteJSONSync(CONFIG_FILE, cfg); }
 
 function loadState() { return safeReadJSON(STATE_FILE, null); }
-function saveState(state) { atomicWriteJSONSync(STATE_FILE, state); }
+function saveState(state) {
+  atomicWriteJSONSync(STATE_FILE, state);
+  // Rotating backup so a wipe (volume swap, accidental /cycle-end, bug)
+  // is one /cycle-restore away.
+  try { writeBackup(state); } catch (e) { console.log('[backup] write error:', e.message); }
+}
+
+const BACKUP_DIR = path.join(path.dirname(STATE_FILE), 'backups');
+const MAX_BACKUPS = 10;
+function writeBackup(state) {
+  if (!state) return;
+  try { fs.mkdirSync(BACKUP_DIR, { recursive: true }); } catch {}
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const backupPath = path.join(BACKUP_DIR, `attendance-${stamp}.json`);
+  atomicWriteJSONSync(backupPath, state);
+  pruneBackups();
+}
+function pruneBackups() {
+  try {
+    const files = fs.readdirSync(BACKUP_DIR)
+      .filter(f => f.startsWith('attendance-') && f.endsWith('.json'))
+      .sort(); // ISO timestamps sort lexically
+    while (files.length > MAX_BACKUPS) {
+      const oldest = files.shift();
+      try { fs.unlinkSync(path.join(BACKUP_DIR, oldest)); } catch {}
+    }
+  } catch {}
+}
+function listBackups() {
+  try {
+    return fs.readdirSync(BACKUP_DIR)
+      .filter(f => f.startsWith('attendance-') && f.endsWith('.json'))
+      .sort()
+      .reverse(); // newest first
+  } catch { return []; }
+}
+function loadBackup(filename) {
+  return safeReadJSON(path.join(BACKUP_DIR, filename), null);
+}
+function restoreFromBackup(filename) {
+  const data = loadBackup(filename);
+  if (!data) return null;
+  // Use atomicWriteJSONSync directly so the restore itself doesn't trigger
+  // another backup-write (would push the just-restored copy to top of list).
+  atomicWriteJSONSync(STATE_FILE, data);
+  return data;
+}
 
 function loadHistory() { return safeReadJSON(HISTORY_FILE, []); }
 function appendHistory(cycleResult) {
@@ -627,4 +673,21 @@ module.exports = {
   clearStaleVoiceSessions,
   ENGAGEMENT_WEIGHTS,
   DRIVE_BY_THRESHOLD_MIN,
+  listBackups,
+  loadBackup,
+  restoreFromBackup,
+  editCycleStartDate,
 };
+
+// Edit the active cycle's startDate without losing attendance/voice/chat
+// data. Recomputes cycleId so it stays consistent with the new date.
+function editCycleStartDate(newStartDateISO) {
+  const state = loadState();
+  if (!state) return { error: 'No active cycle to edit.' };
+  const newStart = moment(newStartDateISO).tz(TIMEZONE).startOf('day');
+  if (!newStart.isValid()) return { error: 'Invalid date. Use YYYY-MM-DD.' };
+  state.startDate = newStart.toISOString();
+  state.cycleId   = `cycle_${newStart.format('YYYYMMDD')}_${state.faction}`;
+  saveState(state);
+  return { state };
+}

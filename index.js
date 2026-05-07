@@ -439,6 +439,8 @@ client.on(Events.InteractionCreate, async interaction => {
     if (interaction.commandName === 'cycle-status') return handleCycleStatusCommand(interaction);
     if (interaction.commandName === 'activity')     return handleActivityCommand(interaction);
     if (interaction.commandName === 'engagement')   return handleEngagementCommand(interaction);
+    if (interaction.commandName === 'cycle-edit')   return handleCycleEditCommand(interaction);
+    if (interaction.commandName === 'cycle-restore') return handleCycleRestoreCommand(interaction);
     if (interaction.commandName === 'officers')     return handleOfficersCommand(interaction);
   }
 
@@ -1022,6 +1024,67 @@ async function handleEngagementCommand(interaction) {
   });
 }
 
+// ─── /cycle-edit — change the active cycle's start date ────────────────────
+async function handleCycleEditCommand(interaction) {
+  if (!isAttendanceAdmin(interaction)) {
+    return interaction.reply({ content: '❌ Officer/Admin only.', flags: MessageFlags.Ephemeral });
+  }
+  const newDate = interaction.options.getString('start-date');
+  const result = attendance.editCycleStartDate(newDate);
+  if (result.error) {
+    return interaction.reply({ content: `❌ ${result.error}`, flags: MessageFlags.Ephemeral });
+  }
+  const start = moment(result.state.startDate).tz(attendance.TIMEZONE).format('MMM DD, YYYY');
+  return interaction.reply({
+    embeds: [zeusEmbed(
+      'Cycle Date Updated ⚡',
+      `**Cycle ID:** \`${result.state.cycleId}\`\n` +
+      `**New start date:** ${start}\n\n` +
+      `Attendance, voice, and chat data preserved. Week numbering recalculated from the new start.`
+    )],
+    flags: MessageFlags.Ephemeral,
+  });
+}
+
+// ─── /cycle-restore — restore the active cycle from a backup ───────────────
+async function handleCycleRestoreCommand(interaction) {
+  if (!isAttendanceAdmin(interaction)) {
+    return interaction.reply({ content: '❌ Officer/Admin only.', flags: MessageFlags.Ephemeral });
+  }
+  const backups = attendance.listBackups();
+  if (backups.length === 0) {
+    return interaction.reply({ content: '⚠️ No backups available.', flags: MessageFlags.Ephemeral });
+  }
+  const which = interaction.options.getString('backup');
+  // No filename given → restore the most recent (after confirming what's in it)
+  const filename = which || backups[0];
+  if (!backups.includes(filename)) {
+    return interaction.reply({
+      content: `❌ Backup not found: \`${filename}\`\n\nAvailable (newest first):\n` +
+        backups.slice(0, 10).map(f => `• \`${f}\``).join('\n'),
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+  const restored = attendance.restoreFromBackup(filename);
+  if (!restored) {
+    return interaction.reply({ content: `❌ Failed to restore backup \`${filename}\`.`, flags: MessageFlags.Ephemeral });
+  }
+  const start = moment(restored.startDate).tz(attendance.TIMEZONE).format('MMM DD, YYYY');
+  const attCount = Object.keys(restored.attendance || {}).length;
+  return interaction.reply({
+    embeds: [zeusEmbed(
+      'Cycle Restored ⚡',
+      `**Backup:** \`${filename}\`\n` +
+      `**Cycle ID:** \`${restored.cycleId}\`\n` +
+      `**Start date:** ${start}\n` +
+      `**Faction:** ${restored.faction.toUpperCase()}\n` +
+      `**Members with attendance:** ${attCount}\n\n` +
+      `*${backups.length} backup(s) total. Use \`/cycle-restore backup:<filename>\` to pick a different one.*`
+    )],
+    flags: MessageFlags.Ephemeral,
+  });
+}
+
 // ─── /officers — post officer roles as styled embeds ───────────────────────
 async function handleOfficersCommand(interaction) {
   const header = new EmbedBuilder()
@@ -1326,6 +1389,22 @@ async function registerSlashCommands() {
         .setName('engagement')
         .setDescription('Show the engagement leaderboard for the current cycle'),
 
+      // ── /cycle-edit — fix start date without losing data (Officer+) ──────
+      new SlashCommandBuilder()
+        .setName('cycle-edit')
+        .setDescription('Edit the active cycle\'s start date (preserves attendance)')
+        .addStringOption(o =>
+          o.setName('start-date').setDescription('YYYY-MM-DD').setRequired(true)
+        ),
+
+      // ── /cycle-restore — restore cycle from backup (Officer+) ────────────
+      new SlashCommandBuilder()
+        .setName('cycle-restore')
+        .setDescription('Restore the cycle from a backup (defaults to most recent)')
+        .addStringOption(o =>
+          o.setName('backup').setDescription('Backup filename (omit for newest)').setRequired(false)
+        ),
+
       // ── /officers — post officer roles + responsibilities embed ──────────
       new SlashCommandBuilder()
         .setName('officers')
@@ -1343,10 +1422,10 @@ async function registerSlashCommands() {
       } catch (e) {
         console.log('[Slash Commands] Could not clear global commands:', e.message);
       }
-      console.log(`✅ Slash commands registered to guild ${guild.name} (instant): /announce, /setup, /cycle-start, /cycle-status, /leaderboard, /cycle-end, /activity, /engagement, /officers`);
+      console.log(`✅ Slash commands registered to guild ${guild.name} (instant): /announce, /setup, /cycle-start, /cycle-status, /leaderboard, /cycle-end, /cycle-edit, /cycle-restore, /activity, /engagement, /officers`);
     } else {
       await client.application.commands.set(commands);
-      console.log('✅ Slash commands registered globally (may take up to 1h): /announce, /setup, /cycle-start, /cycle-status, /leaderboard, /cycle-end, /activity, /engagement, /officers');
+      console.log('✅ Slash commands registered globally (may take up to 1h): /announce, /setup, /cycle-start, /cycle-status, /leaderboard, /cycle-end, /cycle-edit, /cycle-restore, /activity, /engagement, /officers');
     }
   } catch (err) {
     console.error('[Slash Commands] Error registering:', err);
@@ -1577,6 +1656,8 @@ client.on('messageCreate', async message => {
       `\`/engagement\` — Engagement leaderboard (chat + voice + war, separate scale)\n` +
       `\`/cycle-start\` — Start a new 7-week cycle (Officer+)\n` +
       `\`/cycle-end\` — Close cycle, assign awards, archive (Officer+)\n` +
+      `\`/cycle-edit\` — Fix the active cycle's start date (Officer+)\n` +
+      `\`/cycle-restore\` — Restore cycle from backup if data is lost (Officer+)\n` +
       `\`/activity\` — Officer view: activity + quality flags (Officer+)\n` +
       `\`/setup\` — Configure tracker channels + award roles (Admin)\n\n` +
       `**🎭 Roles**\n` +
