@@ -1017,26 +1017,85 @@ async function handleOfficersCommand(interaction) {
   return interaction.reply({ embeds: [header, tier1, tier2, tier3, flows] });
 }
 
+// ─── CRON CATCH-UP ───────────────────────────────────────────────────────────
+// node-cron does not re-fire missed jobs after a restart, so a deploy landing
+// during a war window silently drops the alert. We persist a "last fired"
+// timestamp per job; on boot, runMissedAlerts re-fires any job whose
+// scheduled time was in the last CATCHUP_WINDOW_MIN minutes and that hasn't
+// already been fired today.
+const LAST_FIRED_FILE = dataPath('.last_fired.json');
+const CATCHUP_WINDOW_MIN = 10;
+function markFired(jobId) {
+  const log = safeReadJSON(LAST_FIRED_FILE, {});
+  log[jobId] = new Date().toISOString();
+  try { atomicWriteJSONSync(LAST_FIRED_FILE, log); } catch {}
+}
+async function runJob(jobId, fn) {
+  // If catchup just fired this same job moments ago (e.g. boot lands at the
+  // exact cron minute), skip the cron tick to avoid a double-post.
+  const log = safeReadJSON(LAST_FIRED_FILE, {});
+  const lastFired = log[jobId] ? new Date(log[jobId]).getTime() : 0;
+  if (Date.now() - lastFired < 30 * 1000) {
+    console.log(`[cron ${jobId}] skipped (catchup fired ${Math.floor((Date.now() - lastFired)/1000)}s ago)`);
+    return;
+  }
+  try { await fn(); }
+  finally { markFired(jobId); }
+}
+function getCatchupTargets() {
+  // dow: 0=Sun .. 6=Sat. fn must be idempotent-safe at the minute level.
+  return [
+    { id: 'thu-core',           dow: 4, hour: 18, minute: 45, fn: () => client.guilds.cache.forEach(g => sendCoreEarlyAlert(g, 'Thursday')) },
+    { id: 'thu-warn30',         dow: 4, hour: 19, minute: 0,  fn: () => client.guilds.cache.forEach(g => sendWarWarning(g, 'Thursday')) },
+    { id: 'thu-final',          dow: 4, hour: 19, minute: 25, fn: () => client.guilds.cache.forEach(g => sendFinalCall(g)) },
+    { id: 'shadow-war-checkin', dow: 4, hour: 19, minute: 30, fn: runShadowWarCheckin },
+    { id: 'sat-core',           dow: 6, hour: 18, minute: 45, fn: () => client.guilds.cache.forEach(g => sendCoreEarlyAlert(g, 'Saturday')) },
+    { id: 'sat-warn30',         dow: 6, hour: 19, minute: 0,  fn: () => client.guilds.cache.forEach(g => sendWarWarning(g, 'Saturday')) },
+    { id: 'sat-final',          dow: 6, hour: 19, minute: 25, fn: () => client.guilds.cache.forEach(g => sendFinalCall(g)) },
+    // Saturday also has a check-in at 19:30, same id as Thursday — but we
+    // dedupe by scheduled-time comparison so today's run is independent.
+    { id: 'shadow-war-checkin', dow: 6, hour: 19, minute: 30, fn: runShadowWarCheckin },
+    { id: 'vob-checkin',        dow: 0, hour: 20, minute: 0,  fn: runVobCheckin },
+  ];
+}
+function runMissedAlerts() {
+  const log = safeReadJSON(LAST_FIRED_FILE, {});
+  const now = moment().tz(TIMEZONE);
+  for (const t of getCatchupTargets()) {
+    if (now.day() !== t.dow) continue;
+    const scheduled = moment().tz(TIMEZONE).hour(t.hour).minute(t.minute).second(0).millisecond(0);
+    if (now.isBefore(scheduled)) continue;
+    if (now.diff(scheduled, 'minutes') > CATCHUP_WINDOW_MIN) continue;
+    const lastFired = log[t.id] ? moment(log[t.id]) : null;
+    if (lastFired && lastFired.isSameOrAfter(scheduled)) continue;
+    console.log(`[catchup] firing missed ${t.id} (${now.diff(scheduled, 'minutes')}m late)`);
+    Promise.resolve()
+      .then(() => t.fn())
+      .then(() => markFired(t.id))
+      .catch(e => console.log(`[catchup ${t.id}] error:`, e.message));
+  }
+}
+
 // ─── ATTENDANCE: EVENT-START CRON ────────────────────────────────────────────
+// Each scheduled job is named via runJob() so we record a "last fired" stamp,
+// which lets runMissedAlerts() catch up after a deploy that landed mid-window.
+function runShadowWarCheckin() {
+  const state = attendance.getCurrentCycle();
+  if (!state || state.faction !== 'shadows') return;
+  return attendance.postCheckInMessage(client, 'shadow_war').catch(e =>
+    console.log('[Attendance] check-in post error:', e.message)
+  );
+}
+function runVobCheckin() {
+  const state = attendance.getCurrentCycle();
+  if (!state) return;
+  return attendance.postCheckInMessage(client, 'vob').catch(e =>
+    console.log('[Attendance] check-in post error:', e.message)
+  );
+}
 function scheduleAttendanceCheckIns() {
-  // Shadow War: Thu & Sat at 19:30 PHT
-  safeCron('30 19 * * 4,6', () => {
-    const state = attendance.getCurrentCycle();
-    if (!state || state.faction !== 'shadows') return;
-    attendance.postCheckInMessage(client, 'shadow_war').catch(e =>
-      console.log('[Attendance] check-in post error:', e.message)
-    );
-  }, { timezone: TIMEZONE });
-
-  // VoB: Sunday at 20:00 PHT (only weeks 1-3 — postCheckInMessage validates)
-  safeCron('0 20 * * 0', () => {
-    const state = attendance.getCurrentCycle();
-    if (!state) return;
-    attendance.postCheckInMessage(client, 'vob').catch(e =>
-      console.log('[Attendance] check-in post error:', e.message)
-    );
-  }, { timezone: TIMEZONE });
-
+  safeCron('30 19 * * 4,6', () => runJob('shadow-war-checkin', runShadowWarCheckin), { timezone: TIMEZONE });
+  safeCron('0 20 * * 0',    () => runJob('vob-checkin',         runVobCheckin),       { timezone: TIMEZONE });
   console.log('✅ Attendance check-in cron scheduled (Thu/Sat 19:30 + Sun 20:00 PHT)');
 }
 
@@ -1064,6 +1123,10 @@ client.once(Events.ClientReady, () => {
   // Re-arm any in-flight check-in close timers that were lost on shutdown.
   try { attendance.rearmPendingCheckIns(); } catch (e) {
     console.log('[Attendance] rearm error:', e.message);
+  }
+  // Catch up on any war alerts / check-ins missed during deploy downtime.
+  try { runMissedAlerts(); } catch (e) {
+    console.log('[catchup] runMissedAlerts error:', e.message);
   }
   registerSlashCommands();
 });
@@ -1271,32 +1334,14 @@ function scheduleReminders() {
   }, { timezone: TIMEZONE });
 
   // ── THURSDAY ──
-  // 6:45 PM — Core early alert (45 min before)
-  safeCron('45 18 * * 4', () => {
-    guilds().forEach(guild => sendCoreEarlyAlert(guild, 'Thursday'));
-  }, { timezone: TIMEZONE });
-  // 7:00 PM — All war roles (30 min before)
-  safeCron('0 19 * * 4', () => {
-    guilds().forEach(guild => sendWarWarning(guild, 'Thursday'));
-  }, { timezone: TIMEZONE });
-  // 7:25 PM — All war roles (5 min final call)
-  safeCron('25 19 * * 4', () => {
-    guilds().forEach(guild => sendFinalCall(guild));
-  }, { timezone: TIMEZONE });
+  safeCron('45 18 * * 4', () => runJob('thu-core',    () => guilds().forEach(g => sendCoreEarlyAlert(g, 'Thursday'))), { timezone: TIMEZONE });
+  safeCron('0 19 * * 4',  () => runJob('thu-warn30',  () => guilds().forEach(g => sendWarWarning(g, 'Thursday'))),     { timezone: TIMEZONE });
+  safeCron('25 19 * * 4', () => runJob('thu-final',   () => guilds().forEach(g => sendFinalCall(g))),                  { timezone: TIMEZONE });
 
   // ── SATURDAY ──
-  // 6:45 PM — Core early alert
-  safeCron('45 18 * * 6', () => {
-    guilds().forEach(guild => sendCoreEarlyAlert(guild, 'Saturday'));
-  }, { timezone: TIMEZONE });
-  // 7:00 PM — All war roles
-  safeCron('0 19 * * 6', () => {
-    guilds().forEach(guild => sendWarWarning(guild, 'Saturday'));
-  }, { timezone: TIMEZONE });
-  // 7:25 PM — Final call
-  safeCron('25 19 * * 6', () => {
-    guilds().forEach(guild => sendFinalCall(guild));
-  }, { timezone: TIMEZONE });
+  safeCron('45 18 * * 6', () => runJob('sat-core',    () => guilds().forEach(g => sendCoreEarlyAlert(g, 'Saturday'))), { timezone: TIMEZONE });
+  safeCron('0 19 * * 6',  () => runJob('sat-warn30',  () => guilds().forEach(g => sendWarWarning(g, 'Saturday'))),     { timezone: TIMEZONE });
+  safeCron('25 19 * * 6', () => runJob('sat-final',   () => guilds().forEach(g => sendFinalCall(g))),                  { timezone: TIMEZONE });
 
   // Sunday 7:30 PM — Rite of Exile warning
   safeCron('30 19 * * 0', () => {
