@@ -438,6 +438,7 @@ client.on(Events.InteractionCreate, async interaction => {
     if (interaction.commandName === 'cycle-start')  return handleCycleStartCommand(interaction);
     if (interaction.commandName === 'cycle-status') return handleCycleStatusCommand(interaction);
     if (interaction.commandName === 'activity')     return handleActivityCommand(interaction);
+    if (interaction.commandName === 'engagement')   return handleEngagementCommand(interaction);
     if (interaction.commandName === 'officers')     return handleOfficersCommand(interaction);
   }
 
@@ -939,30 +940,85 @@ async function handleActivityCommand(interaction) {
     return interaction.reply({ content: '❌ Officer/Admin only.', flags: MessageFlags.Ephemeral });
   }
   const cfg = attendance.loadConfig();
-  const report = attendance.getActivityReport(interaction.guild, cfg.officerRoleIds);
+  // Use the engagement report so officers see chat + voice + war + flags in
+  // one place. This replaces the older chat-only view.
+  const report = attendance.getEngagementReport(interaction.guild, cfg.officerRoleIds);
   if (!report || report.length === 0) {
     return interaction.reply({
-      content: '📊 No chat activity recorded this cycle. (Cycle may not be active.)',
+      content: '📊 No activity recorded this cycle. (Cycle may not be active.)',
       flags: MessageFlags.Ephemeral,
     });
   }
-  const lines = report.slice(0, 30).map((e, i) => {
-    const off  = e.isOfficer ? ' *(officer)*' : '';
-    const last = e.lastMessage
-      ? moment(e.lastMessage).tz(attendance.TIMEZONE).fromNow()
-      : '—';
-    return `\`${String(i + 1).padStart(2)}\` **${e.username}** — ${e.count} msgs (last: ${last})${off}`;
+  // Re-sort by chat count for the officer "who's talking" view
+  const byChat = [...report].sort((a, b) => b.chatCount - a.chatCount);
+  const lines = byChat.slice(0, 30).map((e, i) => {
+    const off   = e.isOfficer ? ' *(officer)*' : '';
+    const last  = e.lastMessage ? moment(e.lastMessage).tz(attendance.TIMEZONE).fromNow() : '—';
+    const flags = e.flags.length ? ' ' + e.flags.map(f => FLAG_LABEL[f] || f).join(' ') : '';
+    return `\`${String(i + 1).padStart(2)}\` **${e.username}** — 💬${e.chatCount} ` +
+           `· 🎙️${e.warVoiceMin}m war / ${e.globalVoiceMin}m total ` +
+           `· score \`${e.score}\` (last msg: ${last})${off}${flags}`;
   });
-  const total = report.reduce((s, e) => s + e.count, 0);
+  const totalMsgs = report.reduce((s, e) => s + e.chatCount, 0);
   return interaction.reply({
     embeds: [zeusEmbed(
-      'Chat Activity — Officer View',
-      `Showing **${Math.min(30, report.length)}** of **${report.length}** active members ` +
-      `(${total} total messages this cycle).\n\n` +
+      'Activity — Officer View',
+      `Showing **${Math.min(30, byChat.length)}** of **${report.length}** active members ` +
+      `(${totalMsgs} total messages this cycle).\n\n` +
       lines.join('\n') +
-      `\n\n*This view is officer-only and never shown publicly. Used as a soft engagement signal alongside attendance.*`
+      `\n\n🚩 = drive-by credit · 🔇 = no chat 7d · 👻 = no chat & no voice 14d. ` +
+      `Use \`/engagement\` for the public score view.`
     )],
     flags: MessageFlags.Ephemeral,
+  });
+}
+
+// ─── /engagement — public engagement leaderboard (separate from war awards) ─
+const FLAG_LABEL = {
+  drive_by:   '🚩 drive-by',
+  silent:     '🔇 silent',
+  ghost:      '👻 ghost',
+};
+async function handleEngagementCommand(interaction) {
+  const cfg = attendance.loadConfig();
+  const report = attendance.getEngagementReport(interaction.guild, cfg.officerRoleIds);
+  if (!report || report.length === 0) {
+    return interaction.reply({
+      content: '📊 No engagement data yet this cycle. Make sure a cycle is active and members are chatting / joining voice.',
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  const callerId = interaction.user.id;
+  const callerEntry = report.find(e => e.userId === callerId);
+  const top = report.slice(0, 15);
+  const fmtRow = (e, i) => {
+    const off   = e.isOfficer ? ' *(officer)*' : '';
+    const flags = e.flags.length ? ' ' + e.flags.map(f => FLAG_LABEL[f] || f).join(' ') : '';
+    const me    = e.userId === callerId ? ' ⬅️' : '';
+    return `\`${String(i + 1).padStart(2)}\` **${e.username}** — \`${e.score}\`  ` +
+           `(⚔️${e.attendance} · 💬${e.chatCount} · 🎙️${e.warVoiceMin}m war / ${e.globalVoiceMin}m total)${off}${flags}${me}`;
+  };
+  const lines = top.map(fmtRow);
+
+  let myLine = '';
+  if (callerEntry && !top.some(e => e.userId === callerId)) {
+    const idx = report.findIndex(e => e.userId === callerId);
+    myLine = `\n\n— Your rank —\n${fmtRow(callerEntry, idx)}`;
+  }
+
+  const legend =
+    `\n\n**Score:** chat ×1 · channel breadth ×5 · global voice ×0.5/min · ` +
+    `war voice ×2/min · attendance ×50 · recency bonus.\n` +
+    `**Flags:** 🚩 drive-by = avg <5 min in war voice · 🔇 silent = no chat 7d · 👻 ghost = no chat & no voice 14d.\n` +
+    `*This is separate from the cycle MVP / Storm Bearer / Lightning Striker awards (those are war attendance only).*`;
+
+  return interaction.reply({
+    embeds: [zeusEmbed(
+      'Engagement Leaderboard ⚡',
+      `Showing top **${top.length}** of **${report.length}** active members this cycle.\n\n` +
+      lines.join('\n') + myLine + legend
+    )],
   });
 }
 
@@ -1124,6 +1180,11 @@ client.once(Events.ClientReady, () => {
   try { attendance.rearmPendingCheckIns(); } catch (e) {
     console.log('[Attendance] rearm error:', e.message);
   }
+  // Drop any voice sessions left "open" by the previous process — their
+  // joinedAt is no longer trustworthy after a restart.
+  try { attendance.clearStaleVoiceSessions(); } catch (e) {
+    console.log('[Attendance] clearStaleVoiceSessions error:', e.message);
+  }
   // Catch up on any war alerts / check-ins missed during deploy downtime.
   try { runMissedAlerts(); } catch (e) {
     console.log('[catchup] runMissedAlerts error:', e.message);
@@ -1260,6 +1321,11 @@ async function registerSlashCommands() {
         .setName('activity')
         .setDescription('Officer-only chat activity report for the current cycle'),
 
+      // ── /engagement — public engagement leaderboard (any member) ─────────
+      new SlashCommandBuilder()
+        .setName('engagement')
+        .setDescription('Show the engagement leaderboard for the current cycle'),
+
       // ── /officers — post officer roles + responsibilities embed ──────────
       new SlashCommandBuilder()
         .setName('officers')
@@ -1277,10 +1343,10 @@ async function registerSlashCommands() {
       } catch (e) {
         console.log('[Slash Commands] Could not clear global commands:', e.message);
       }
-      console.log(`✅ Slash commands registered to guild ${guild.name} (instant): /announce, /setup, /cycle-start, /cycle-status, /leaderboard, /cycle-end, /activity, /officers`);
+      console.log(`✅ Slash commands registered to guild ${guild.name} (instant): /announce, /setup, /cycle-start, /cycle-status, /leaderboard, /cycle-end, /activity, /engagement, /officers`);
     } else {
       await client.application.commands.set(commands);
-      console.log('✅ Slash commands registered globally (may take up to 1h): /announce, /setup, /cycle-start, /cycle-status, /leaderboard, /cycle-end, /activity, /officers');
+      console.log('✅ Slash commands registered globally (may take up to 1h): /announce, /setup, /cycle-start, /cycle-status, /leaderboard, /cycle-end, /activity, /engagement, /officers');
     }
   } catch (err) {
     console.error('[Slash Commands] Error registering:', err);
@@ -1507,10 +1573,11 @@ client.on('messageCreate', async message => {
       `\`$signup\` — How to sign up\n\n` +
       `**🏆 Cycle & Attendance**\n` +
       `\`/cycle-status\` — Current cycle progress + your attendance\n` +
-      `\`/leaderboard\` — Current attendance standings\n` +
+      `\`/leaderboard\` — Current attendance standings (war attendance only)\n` +
+      `\`/engagement\` — Engagement leaderboard (chat + voice + war, separate scale)\n` +
       `\`/cycle-start\` — Start a new 7-week cycle (Officer+)\n` +
       `\`/cycle-end\` — Close cycle, assign awards, archive (Officer+)\n` +
-      `\`/activity\` — Chat activity report (Officer+)\n` +
+      `\`/activity\` — Officer view: activity + quality flags (Officer+)\n` +
       `\`/setup\` — Configure tracker channels + award roles (Admin)\n\n` +
       `**🎭 Roles**\n` +
       `\`$myroles\` — Open your private role menu (DM)\n` +

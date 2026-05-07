@@ -158,31 +158,104 @@ function recordAttendance(userId, eventKey, eventDate) {
 }
 
 // ─── VOICE PRESENCE LISTENER ──────────────────────────────────────────────────
+// Tracks two things per cycle:
+// 1. War voice duration (clamped to the event window) — used to flag drive-by
+//    credit grabs and to feed the engagement score.
+// 2. Global voice duration (any voice channel, anytime) — pure engagement
+//    signal, no impact on awards.
 async function handleVoiceStateUpdate(oldState, newState) {
   try {
-    const cfg = loadConfig();
-    if (!cfg.warVoiceCategoryId) return;
-
-    const newCh = newState.channel;
+    const userId = newState.id;
     const oldCh = oldState.channel;
-    const inWarCategoryNow  = newCh && newCh.parentId === cfg.warVoiceCategoryId;
-    const inWarCategoryBefore = oldCh && oldCh.parentId === cfg.warVoiceCategoryId;
+    const newCh = newState.channel;
+    if (oldCh?.id === newCh?.id) return; // mute/deafen toggles, no channel change
 
-    // Only act when the user *enters* the war category (from outside it).
-    // Moves between rooms within the same category don't re-trigger.
-    if (!inWarCategoryNow) return;
-    if (inWarCategoryBefore) return;
+    // Close any session that was open in the old channel (covers leave + move).
+    if (oldCh) closeVoiceSession(userId);
 
-    const event = getActiveEvent(new Date());
-    if (!event) return;
+    if (newCh) {
+      const cfg = loadConfig();
+      const inWar = cfg.warVoiceCategoryId && newCh.parentId === cfg.warVoiceCategoryId;
+      const event = inWar ? getActiveEvent(new Date()) : null;
 
-    const recorded = recordAttendance(newState.id, event.key, event.eventDate);
-    if (recorded) {
-      const tag = newState.member?.user?.tag || newState.id;
-      console.log(`[Attendance] ${tag} credited for ${event.def.name} (joined ${newCh.name})`);
+      // Existing credit logic preserved: first entry to war category during
+      // an active event window earns the boolean +1 attendance.
+      if (event) {
+        const recorded = recordAttendance(userId, event.key, event.eventDate);
+        if (recorded) {
+          const tag = newState.member?.user?.tag || userId;
+          console.log(`[Attendance] ${tag} credited for ${event.def.name} (joined ${newCh.name})`);
+        }
+      }
+      openVoiceSession(userId, newCh.id, event);
     }
   } catch (e) {
     console.log('[Attendance] voice handler error:', e.message);
+  }
+}
+
+function openVoiceSession(userId, channelId, event) {
+  const state = loadState();
+  if (!state) return;
+  state.voiceSessions = state.voiceSessions || {};
+  state.voiceSessions[userId] = {
+    joinedAt: new Date().toISOString(),
+    channelId,
+    eventKey:  event?.key  || null,
+    eventDate: event?.eventDate || null,
+  };
+  saveState(state);
+}
+
+function closeVoiceSession(userId) {
+  const state = loadState();
+  if (!state) return;
+  const sess = state.voiceSessions?.[userId];
+  if (!sess) return;
+
+  const joinedMs = new Date(sess.joinedAt).getTime();
+  const nowMs = Date.now();
+  const totalMin = Math.max(0, (nowMs - joinedMs) / 60000);
+
+  // Global voice presence accrues regardless of channel
+  state.globalVoiceMinutes = state.globalVoiceMinutes || {};
+  state.globalVoiceMinutes[userId] = (state.globalVoiceMinutes[userId] || 0) + totalMin;
+  state.voiceLastSeen = state.voiceLastSeen || {};
+  state.voiceLastSeen[userId] = new Date().toISOString();
+
+  // War voice: clamp to the event window so post-war hangouts don't inflate
+  if (sess.eventKey && sess.eventDate) {
+    const warMin = clampToEventWindow(joinedMs, nowMs, sess.eventKey, sess.eventDate);
+    if (warMin > 0) {
+      const att = state.attendance?.[userId];
+      const ev  = att?.events?.find(e => e.key === sess.eventKey && e.date === sess.eventDate);
+      if (ev) ev.voiceMinutes = Math.round((ev.voiceMinutes || 0) + warMin);
+    }
+  }
+
+  delete state.voiceSessions[userId];
+  saveState(state);
+}
+
+function clampToEventWindow(joinedMs, leftMs, eventKey, eventDate) {
+  const def = EVENT_DEFINITIONS[eventKey];
+  if (!def) return 0;
+  const startMs = moment.tz(`${eventDate} ${def.startTime}`, 'YYYY-MM-DD HH:mm', TIMEZONE).valueOf();
+  const endMs   = moment.tz(`${eventDate} ${def.endTime}`,   'YYYY-MM-DD HH:mm', TIMEZONE).valueOf();
+  const start = Math.max(joinedMs, startMs);
+  const end   = Math.min(leftMs,   endMs);
+  return Math.max(0, (end - start) / 60000);
+}
+
+// On boot, voice sessions in state are stale (the bot restarted, so the
+// session start time is no longer trustworthy). Drop them; new joins/leaves
+// will reopen sessions as members move.
+function clearStaleVoiceSessions() {
+  const state = loadState();
+  if (!state) return;
+  if (state.voiceSessions && Object.keys(state.voiceSessions).length) {
+    state.voiceSessions = {};
+    saveState(state);
   }
 }
 
@@ -281,16 +354,20 @@ function rearmPendingCheckIns() {
   }
 }
 
-// ─── CHAT ACTIVITY (officer-only signal, not a public competition) ──────────
+// ─── CHAT ACTIVITY ──────────────────────────────────────────────────────────
+// Per-user: count, lastMessage, channels (breadth) — feeds engagement score.
 function recordChatMessage(userId, channelId) {
   const state = loadState();
   if (!state) return; // only track during an active cycle
-  if (!state.chatActivity) state.chatActivity = {};
+  state.chatActivity = state.chatActivity || {};
   if (!state.chatActivity[userId]) {
-    state.chatActivity[userId] = { count: 0, lastMessage: null };
+    state.chatActivity[userId] = { count: 0, lastMessage: null, channels: {} };
   }
-  state.chatActivity[userId].count++;
-  state.chatActivity[userId].lastMessage = new Date().toISOString();
+  const a = state.chatActivity[userId];
+  a.count++;
+  a.lastMessage = new Date().toISOString();
+  a.channels = a.channels || {};
+  a.channels[channelId] = (a.channels[channelId] || 0) + 1;
   saveState(state);
 }
 
@@ -312,6 +389,114 @@ function getActivityReport(guild, officerRoleIds = []) {
     };
   });
   entries.sort((a, b) => b.count - a.count);
+  return entries;
+}
+
+// ─── ENGAGEMENT SCORE + QUALITY FLAGS ────────────────────────────────────────
+// War attendance stays the sole award criterion. Engagement is a separate
+// public scale: chat + voice + breadth + recency. Officer-facing quality
+// flags surface drive-by credit grabs and ghost members without affecting
+// the cycle outcome.
+const ENGAGEMENT_WEIGHTS = {
+  chatPerMessage:        1,
+  channelBreadthPer:     5,
+  globalVoicePerMin:     0.5,
+  warVoicePerMin:        2,
+  attendancePerEvent:    50,
+  recencyMultiplier:     2,   // applied to last-7-day chat
+};
+// Drive-by: less than this many minutes in war voice during the event window
+// is treated as a credit grab. Wars are 5–20 min so 5 min = the minimum
+// duration of a real engagement.
+const DRIVE_BY_THRESHOLD_MIN = 5;
+
+function computeEngagementScore(state, userId) {
+  if (!state) return 0;
+  const chat   = state.chatActivity?.[userId];
+  const att    = state.attendance?.[userId];
+  const gvm    = state.globalVoiceMinutes?.[userId] || 0;
+  const events = att?.events || [];
+
+  const warVoiceMin = events.reduce((sum, e) => sum + (e.voiceMinutes || 0), 0);
+  const channelBreadth = chat?.channels ? Object.keys(chat.channels).length : 0;
+
+  // Recency bonus: messages in the last 7 days. We don't have per-day
+  // buckets, so we approximate using lastMessage age — full bonus if last
+  // active within 7 days, scaled toward 0 over 14 days.
+  let recency = 0;
+  if (chat?.lastMessage) {
+    const ageDays = (Date.now() - new Date(chat.lastMessage).getTime()) / 86400000;
+    recency = Math.max(0, 1 - ageDays / 14);
+  }
+
+  return Math.round(
+    (chat?.count || 0)        * ENGAGEMENT_WEIGHTS.chatPerMessage +
+    channelBreadth            * ENGAGEMENT_WEIGHTS.channelBreadthPer +
+    gvm                       * ENGAGEMENT_WEIGHTS.globalVoicePerMin +
+    warVoiceMin               * ENGAGEMENT_WEIGHTS.warVoicePerMin +
+    (att?.count || 0)         * ENGAGEMENT_WEIGHTS.attendancePerEvent +
+    (chat?.count || 0) * recency * ENGAGEMENT_WEIGHTS.recencyMultiplier
+  );
+}
+
+function getQualityFlags(state, userId) {
+  const flags = [];
+  if (!state) return flags;
+  const att = state.attendance?.[userId];
+  const chat = state.chatActivity?.[userId];
+  const events = att?.events || [];
+  const attended = att?.count || 0;
+  const totalWarVoice = events.reduce((sum, e) => sum + (e.voiceMinutes || 0), 0);
+  const avgWarVoice = attended ? totalWarVoice / attended : 0;
+  const lastMsg = chat?.lastMessage ? new Date(chat.lastMessage).getTime() : 0;
+  const lastVoice = state.voiceLastSeen?.[userId]
+    ? new Date(state.voiceLastSeen[userId]).getTime() : 0;
+  const now = Date.now();
+  const daysSinceMsg   = lastMsg   ? (now - lastMsg)   / 86400000 : Infinity;
+  const daysSinceVoice = lastVoice ? (now - lastVoice) / 86400000 : Infinity;
+
+  if (attended > 0 && avgWarVoice < DRIVE_BY_THRESHOLD_MIN) flags.push('drive_by');
+  if (attended > 0 && daysSinceMsg > 7) flags.push('silent');
+  if (daysSinceMsg > 14 && daysSinceVoice > 14) flags.push('ghost');
+  return flags;
+}
+
+// Build the unified engagement report — every member with any cycle signal,
+// sorted by engagement score. Includes raw signals and quality flags.
+function getEngagementReport(guild, officerRoleIds = []) {
+  const state = loadState();
+  if (!state) return null;
+
+  // Union of every userId we've seen any signal for this cycle
+  const ids = new Set([
+    ...Object.keys(state.attendance || {}),
+    ...Object.keys(state.chatActivity || {}),
+    ...Object.keys(state.globalVoiceMinutes || {}),
+  ]);
+
+  const entries = [...ids].map(userId => {
+    const member = guild?.members?.cache?.get(userId);
+    const isOfficer = officerRoleIds.length && member
+      ? member.roles.cache.some(r => officerRoleIds.includes(r.id))
+      : false;
+    const att   = state.attendance?.[userId];
+    const chat  = state.chatActivity?.[userId];
+    const events = att?.events || [];
+    return {
+      userId,
+      username: member?.displayName || member?.user?.username || `<@${userId}>`,
+      isOfficer,
+      score:           computeEngagementScore(state, userId),
+      flags:           getQualityFlags(state, userId),
+      attendance:      att?.count || 0,
+      chatCount:       chat?.count || 0,
+      channelBreadth:  chat?.channels ? Object.keys(chat.channels).length : 0,
+      globalVoiceMin:  Math.round(state.globalVoiceMinutes?.[userId] || 0),
+      warVoiceMin:     Math.round(events.reduce((s, e) => s + (e.voiceMinutes || 0), 0)),
+      lastMessage:     chat?.lastMessage || null,
+    };
+  });
+  entries.sort((a, b) => b.score - a.score);
   return entries;
 }
 
@@ -436,4 +621,10 @@ module.exports = {
   recordChatMessage,
   getActivityReport,
   rearmPendingCheckIns,
+  computeEngagementScore,
+  getQualityFlags,
+  getEngagementReport,
+  clearStaleVoiceSessions,
+  ENGAGEMENT_WEIGHTS,
+  DRIVE_BY_THRESHOLD_MIN,
 };
