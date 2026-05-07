@@ -441,6 +441,7 @@ client.on(Events.InteractionCreate, async interaction => {
     if (interaction.commandName === 'engagement')   return handleEngagementCommand(interaction);
     if (interaction.commandName === 'cycle-edit')   return handleCycleEditCommand(interaction);
     if (interaction.commandName === 'cycle-restore') return handleCycleRestoreCommand(interaction);
+    if (interaction.commandName === 'data-debug')   return handleDataDebugCommand(interaction);
     if (interaction.commandName === 'officers')     return handleOfficersCommand(interaction);
   }
 
@@ -1085,6 +1086,44 @@ async function handleCycleRestoreCommand(interaction) {
   });
 }
 
+// ─── /data-debug — list files on the persistent volume (Officer+) ─────────
+async function handleDataDebugCommand(interaction) {
+  if (!isAttendanceAdmin(interaction)) {
+    return interaction.reply({ content: '❌ Officer/Admin only.', flags: MessageFlags.Ephemeral });
+  }
+  const lines = [`**DATA_DIR:** \`${DATA_DIR}\``, `**volume mode:** ${process.env.DATA_DIR ? 'volume' : 'ephemeral ⚠️'}`];
+
+  function listDir(label, dir) {
+    try {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      if (entries.length === 0) return `\n\n**${label}:** *(empty)*`;
+      const rows = entries.map(e => {
+        const full = path.join(dir, e.name);
+        let size = '';
+        try { size = e.isFile() ? `${fs.statSync(full).size}b` : '<dir>'; } catch {}
+        return `• \`${e.name}\` ${size}`;
+      });
+      return `\n\n**${label}** (${entries.length}):\n${rows.join('\n')}`;
+    } catch (e) {
+      return `\n\n**${label}:** *(${e.code || e.message})*`;
+    }
+  }
+  lines.push(listDir(DATA_DIR, DATA_DIR));
+  const backupsDir = path.join(DATA_DIR, 'backups');
+  lines.push(listDir(backupsDir, backupsDir));
+
+  // Also include the cycle state shape if present
+  const state = attendance.loadState();
+  if (state) {
+    lines.push(`\n\n**.attendance.json:** cycleId=\`${state.cycleId}\` faction=${state.faction} ` +
+               `members=${Object.keys(state.attendance || {}).length}`);
+  } else {
+    lines.push(`\n\n**.attendance.json:** *(missing or unparseable — getCurrentCycle returns null)*`);
+  }
+
+  return interaction.reply({ content: lines.join(''), flags: MessageFlags.Ephemeral });
+}
+
 // ─── /officers — post officer roles as styled embeds ───────────────────────
 async function handleOfficersCommand(interaction) {
   const header = new EmbedBuilder()
@@ -1404,6 +1443,11 @@ async function registerSlashCommands() {
         .addStringOption(o =>
           o.setName('backup').setDescription('Backup filename (omit for newest)').setRequired(false)
         ),
+
+      // ── /data-debug — inspect /data volume contents (Officer+) ───────────
+      new SlashCommandBuilder()
+        .setName('data-debug')
+        .setDescription('Show what files exist on the persistent volume (officer diagnostic)'),
 
       // ── /officers — post officer roles + responsibilities embed ──────────
       new SlashCommandBuilder()
