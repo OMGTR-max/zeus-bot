@@ -50,7 +50,10 @@ function defaultConfig() {
 function loadConfig() {
   return { ...defaultConfig(), ...safeReadJSON(CONFIG_FILE, {}) };
 }
-function saveConfig(cfg) { atomicWriteJSONSync(CONFIG_FILE, cfg); }
+function saveConfig(cfg) {
+  atomicWriteJSONSync(CONFIG_FILE, cfg);
+  try { writeConfigBackup(cfg); } catch (e) { console.log('[config-backup] write error:', e.message); }
+}
 
 function loadState() { return safeReadJSON(STATE_FILE, null); }
 function saveState(state) {
@@ -61,6 +64,7 @@ function saveState(state) {
 }
 
 const BACKUP_DIR = path.join(path.dirname(STATE_FILE), 'backups');
+const CONFIG_BACKUP_DIR = path.join(path.dirname(CONFIG_FILE), 'config-backups');
 const MAX_BACKUPS = 10;
 function writeBackup(state) {
   if (!state) return;
@@ -68,18 +72,67 @@ function writeBackup(state) {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const backupPath = path.join(BACKUP_DIR, `attendance-${stamp}.json`);
   atomicWriteJSONSync(backupPath, state);
-  pruneBackups();
+  pruneBackups(BACKUP_DIR, 'attendance-');
 }
-function pruneBackups() {
+function writeConfigBackup(cfg) {
+  if (!cfg) return;
+  try { fs.mkdirSync(CONFIG_BACKUP_DIR, { recursive: true }); } catch {}
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const backupPath = path.join(CONFIG_BACKUP_DIR, `config-${stamp}.json`);
+  atomicWriteJSONSync(backupPath, cfg);
+  pruneBackups(CONFIG_BACKUP_DIR, 'config-');
+}
+function pruneBackups(dir, prefix) {
   try {
-    const files = fs.readdirSync(BACKUP_DIR)
-      .filter(f => f.startsWith('attendance-') && f.endsWith('.json'))
+    const files = fs.readdirSync(dir)
+      .filter(f => f.startsWith(prefix) && f.endsWith('.json'))
       .sort(); // ISO timestamps sort lexically
     while (files.length > MAX_BACKUPS) {
       const oldest = files.shift();
-      try { fs.unlinkSync(path.join(BACKUP_DIR, oldest)); } catch {}
+      try { fs.unlinkSync(path.join(dir, oldest)); } catch {}
     }
   } catch {}
+}
+
+// Self-heal on boot: if the live state or config file is missing but a
+// backup exists, restore the newest one. Keeps the bot working when a
+// volume swap, fs glitch, or accidental delete wipes the live files but
+// rolling backups survived.
+function autoRecoverFromBackups() {
+  const result = { stateRecovered: null, configRecovered: null };
+  try {
+    if (!fs.existsSync(STATE_FILE)) {
+      const backups = listBackups();
+      if (backups.length > 0) {
+        const latest = backups[0];
+        const data = loadBackup(latest);
+        if (data) {
+          atomicWriteJSONSync(STATE_FILE, data);
+          result.stateRecovered = latest;
+          console.log(`[autorecover] Restored .attendance.json from backup ${latest}`);
+        }
+      }
+    }
+  } catch (e) { console.log('[autorecover] state error:', e.message); }
+  try {
+    if (!fs.existsSync(CONFIG_FILE)) {
+      const files = fs.existsSync(CONFIG_BACKUP_DIR)
+        ? fs.readdirSync(CONFIG_BACKUP_DIR)
+            .filter(f => f.startsWith('config-') && f.endsWith('.json'))
+            .sort().reverse()
+        : [];
+      if (files.length > 0) {
+        const latest = files[0];
+        const data = safeReadJSON(path.join(CONFIG_BACKUP_DIR, latest), null);
+        if (data) {
+          atomicWriteJSONSync(CONFIG_FILE, data);
+          result.configRecovered = latest;
+          console.log(`[autorecover] Restored .attendance_config.json from backup ${latest}`);
+        }
+      }
+    }
+  } catch (e) { console.log('[autorecover] config error:', e.message); }
+  return result;
 }
 function listBackups() {
   try {
@@ -677,6 +730,7 @@ module.exports = {
   loadBackup,
   restoreFromBackup,
   editCycleStartDate,
+  autoRecoverFromBackups,
 };
 
 // Edit the active cycle's startDate without losing attendance/voice/chat
