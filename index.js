@@ -1086,12 +1086,35 @@ async function handleCycleRestoreCommand(interaction) {
   });
 }
 
+// Probe whether DATA_DIR is a real persistent mount or just a directory on
+// the container's ephemeral filesystem. A real mount has a different `dev`
+// (device id) from its parent — same `dev` means same filesystem = ephemeral.
+function inspectDataMount() {
+  const envSet = !!process.env.DATA_DIR;
+  try {
+    const dataStat   = fs.statSync(DATA_DIR);
+    const parentStat = fs.statSync(path.dirname(DATA_DIR));
+    const realMount  = dataStat.dev !== parentStat.dev;
+    return { envSet, realMount, dev: dataStat.dev, parentDev: parentStat.dev };
+  } catch (e) {
+    return { envSet, realMount: false, error: e.code || e.message };
+  }
+}
+
 // ─── /data-debug — list files on the persistent volume (Officer+) ─────────
 async function handleDataDebugCommand(interaction) {
   if (!isAttendanceAdmin(interaction)) {
     return interaction.reply({ content: '❌ Officer/Admin only.', flags: MessageFlags.Ephemeral });
   }
-  const lines = [`**DATA_DIR:** \`${DATA_DIR}\``, `**volume mode:** ${process.env.DATA_DIR ? 'volume' : 'ephemeral ⚠️'}`];
+  const mount = inspectDataMount();
+  let modeLabel;
+  if (mount.error)        modeLabel = `error: ${mount.error} ⚠️`;
+  else if (mount.realMount) modeLabel = mount.envSet ? 'real mount ✅' : 'real mount (env unset)';
+  else                    modeLabel = mount.envSet ? 'ephemeral ⚠️ (env set, but no volume mounted)' : 'ephemeral ⚠️';
+  const lines = [
+    `**DATA_DIR:** \`${DATA_DIR}\``,
+    `\n**Mount status:** ${modeLabel}`,
+  ];
 
   function listDir(label, dir) {
     try {
@@ -1099,9 +1122,13 @@ async function handleDataDebugCommand(interaction) {
       if (entries.length === 0) return `\n\n**${label}:** *(empty)*`;
       const rows = entries.map(e => {
         const full = path.join(dir, e.name);
-        let size = '';
-        try { size = e.isFile() ? `${fs.statSync(full).size}b` : '<dir>'; } catch {}
-        return `• \`${e.name}\` ${size}`;
+        let info = '';
+        try {
+          const st = fs.statSync(full);
+          const mtime = new Date(st.mtimeMs).toISOString().replace('T', ' ').slice(0, 19);
+          info = e.isFile() ? `${st.size}b · ${mtime}` : `<dir> · ${mtime}`;
+        } catch {}
+        return `• \`${e.name}\` ${info}`;
       });
       return `\n\n**${label}** (${entries.length}):\n${rows.join('\n')}`;
     } catch (e) {
@@ -1109,8 +1136,10 @@ async function handleDataDebugCommand(interaction) {
     }
   }
   lines.push(listDir(DATA_DIR, DATA_DIR));
-  const backupsDir = path.join(DATA_DIR, 'backups');
+  const backupsDir       = path.join(DATA_DIR, 'backups');
+  const configBackupsDir = path.join(DATA_DIR, 'config-backups');
   lines.push(listDir(backupsDir, backupsDir));
+  lines.push(listDir(configBackupsDir, configBackupsDir));
 
   // Also include the cycle state shape if present
   const state = attendance.loadState();
@@ -1120,6 +1149,14 @@ async function handleDataDebugCommand(interaction) {
   } else {
     lines.push(`\n\n**.attendance.json:** *(missing or unparseable — getCurrentCycle returns null)*`);
   }
+  const cfg = attendance.loadConfig();
+  const cfgFmt = id => id ? `set` : '`unset`';
+  lines.push(
+    `\n\n**.attendance_config.json:** ` +
+    `checkIn=${cfgFmt(cfg.checkInChannelId)} · ` +
+    `warVoiceCat=${cfgFmt(cfg.warVoiceCategoryId)} · ` +
+    `leaderboard=${cfgFmt(cfg.leaderboardChannelId)}`
+  );
 
   return interaction.reply({ content: lines.join(''), flags: MessageFlags.Ephemeral });
 }
@@ -1269,7 +1306,26 @@ process.on('uncaughtException', (err) => {
 client.once(Events.ClientReady, () => {
   console.log(`\n⚡ Zeus Bot v3.0 online! Logged in as ${client.user.tag}`);
   console.log(`📅 Timezone: Asia/Manila (PHT)`);
-  console.log(`💾 Persisting state to: ${DATA_DIR}${process.env.DATA_DIR ? ' (volume)' : ' (ephemeral — set DATA_DIR for persistence!)'}`);
+  // Real-mount probe + boot inventory of /data so any future data-loss
+  // incident leaves clear evidence in deploy logs.
+  const mount = inspectDataMount();
+  console.log(`💾 DATA_DIR=${DATA_DIR} | env=${mount.envSet} | realMount=${mount.realMount}${mount.error ? ` | error=${mount.error}` : ''}`);
+  if (mount.envSet && !mount.realMount) {
+    console.log('⚠️  DATA_DIR env is set but /data is NOT a real mount — writes will be lost on next redeploy! Check Railway volume attachment.');
+  }
+  try {
+    const entries = fs.readdirSync(DATA_DIR);
+    console.log(`💾 /data inventory (${entries.length}): ${entries.join(', ') || '(empty)'}`);
+  } catch (e) {
+    console.log(`💾 /data inventory: error ${e.code || e.message}`);
+  }
+  // Self-heal: if live state/config files were wiped but rolling backups
+  // survived, restore from the newest one before any cron or handler runs.
+  try {
+    const rec = attendance.autoRecoverFromBackups();
+    if (rec.stateRecovered)  console.log(`💾 Auto-recovered .attendance.json from ${rec.stateRecovered}`);
+    if (rec.configRecovered) console.log(`💾 Auto-recovered .attendance_config.json from ${rec.configRecovered}`);
+  } catch (e) { console.log('[autorecover] error:', e.message); }
   console.log(`🆕 v3.1 Features: Slash command /announce with modal form | RSS Patch Tracker | DM Role Menu`);
   console.log(`✨ ENHANCED: Rich Announcement Embeds with Interactive Buttons\n`);
   client.user.setActivity('⚔️ Shadow War | /announce', { type: ActivityType.Playing });
