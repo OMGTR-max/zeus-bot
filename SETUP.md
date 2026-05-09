@@ -59,7 +59,7 @@ Make sure these channels exist in your server (Zeus Bot uses them):
 | Channel Name | Purpose |
 |---|---|
 | `#clan-announcements` | Clan-wide announcements |
-| `#shadow-war-alerts` | Shadow War reminders & pings |
+| `#shadow_vob-war-alerts` | Shadow War reminders & pings |
 | `#welcome` | Auto-welcome new members |
 | `#mod-log` | Moderation action logs |
 | `#music-commands` | Music commands |
