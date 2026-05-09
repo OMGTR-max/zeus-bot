@@ -11,7 +11,14 @@ const writeQueues = new Map();
 // Resolve persistent data path. On Railway/Render/Fly, mount a volume
 // and set DATA_DIR (e.g. DATA_DIR=/data) so JSON state survives redeploys.
 // Locally, falls back to the repo root next to index.js.
-const DATA_DIR = process.env.DATA_DIR || path.join(__dirname);
+// .trim() guards against an invisible-whitespace value (e.g. " /data") in
+// the platform env-var UI silently sending writes to a space-prefixed
+// sibling directory while the actual volume mount sits untouched at /data.
+const RAW_DATA_DIR = process.env.DATA_DIR;
+const DATA_DIR = (RAW_DATA_DIR && RAW_DATA_DIR.trim()) || path.join(__dirname);
+if (RAW_DATA_DIR && RAW_DATA_DIR !== RAW_DATA_DIR.trim()) {
+  console.log(`[persistence] WARNING: DATA_DIR env var had surrounding whitespace; trimmed to '${DATA_DIR}'. Fix the env var in your platform settings.`);
+}
 try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch {}
 
 function dataPath(filename) {
