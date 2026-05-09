@@ -26,7 +26,7 @@ const PREFIX   = '$';
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 const CONFIG = {
   announcementChannelName: 'clan-announcements',
-  shadowWarChannelName:    'shadow-war-alerts',
+  shadowWarChannelName:    'shadow_vob-war-alerts',
   welcomeChannelName:      'welcome',
   modLogChannelName:       'mod-log',
 };
