@@ -526,6 +526,35 @@ client.on(Events.InteractionCreate, async interaction => {
     return;
   }
 
+  // ── /cycle-end confirmation buttons ───────────────────────────────────────
+  if (customId.startsWith('cycle_end_')) {
+    const parts = customId.split('_'); // [cycle, end, action, userId, ...cycleId]
+    const action = parts[2];
+    const invokerId = parts[3];
+    if (user.id !== invokerId) {
+      return interaction.reply({ content: '❌ Only the officer who ran `/cycle-end` can confirm.', flags: MessageFlags.Ephemeral });
+    }
+    if (action === 'cancel') {
+      return interaction.update({
+        embeds: [zeusEmbed('Cycle End Cancelled', 'No changes made.', 0x95A5A6)],
+        components: [],
+      });
+    }
+    if (action === 'confirm') {
+      const expectedCycleId = parts.slice(4).join('_');
+      const current = attendance.getCurrentCycle();
+      if (!current || current.cycleId !== expectedCycleId) {
+        return interaction.update({
+          content: '⚠️ The cycle changed since you opened this prompt. Run `/cycle-end` again.',
+          embeds: [],
+          components: [],
+        });
+      }
+      return executeCycleEnd(interaction);
+    }
+    return;
+  }
+
   if (!customId.startsWith('role_')) return;
 
   // Find member across guilds (needed since button is in DM)
@@ -882,11 +911,44 @@ async function handleCycleEndCommand(interaction) {
     return interaction.reply({ content: '⚠️ No active cycle to end.', flags: MessageFlags.Ephemeral });
   }
 
-  await interaction.deferReply();
+  // /cycle-end is destructive — it deletes the live state file and assigns
+  // award roles. Require an explicit second click so an accidental run
+  // can't nuke the cycle. cycleId is encoded in the button id so a stale
+  // click after a new cycle start is detected and refused.
+  const memberCount = Object.keys(state.attendance || {}).length;
+  const start = moment(state.startDate).tz(attendance.TIMEZONE).format('MMM DD, YYYY');
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`cycle_end_confirm_${interaction.user.id}_${state.cycleId}`)
+      .setLabel('Confirm End Cycle')
+      .setStyle(ButtonStyle.Danger),
+    new ButtonBuilder()
+      .setCustomId(`cycle_end_cancel_${interaction.user.id}`)
+      .setLabel('Cancel')
+      .setStyle(ButtonStyle.Secondary),
+  );
+  return interaction.reply({
+    embeds: [zeusEmbed(
+      '⚠️ Confirm Cycle End',
+      `**Cycle:** \`${state.cycleId}\`\n` +
+      `**Faction:** ${state.faction.toUpperCase()}\n` +
+      `**Start date:** ${start}\n` +
+      `**Members tracked:** ${memberCount}\n\n` +
+      `This will assign cycle award roles, archive the leaderboard to history, and **delete the live state file**.\n\n` +
+      `Click **Confirm End Cycle** within 60 seconds to proceed, or **Cancel**.`,
+      0xE67E22
+    )],
+    components: [row],
+    flags: MessageFlags.Ephemeral,
+  });
+}
+
+async function executeCycleEnd(interaction) {
+  await interaction.deferUpdate();
   try {
     const result = await attendance.endCycle(interaction.guild);
     if (result.error) {
-      return interaction.editReply({ content: `❌ ${result.error}` });
+      return interaction.editReply({ content: `❌ ${result.error}`, embeds: [], components: [] });
     }
 
     const { winners, leaderboard, faction } = result;
@@ -912,10 +974,13 @@ async function handleCycleEndCommand(interaction) {
         }
       } catch {}
     }
-    return interaction.editReply({ embeds: [zeusEmbed('Cycle Closed ⚡', summary)] });
+    return interaction.editReply({
+      embeds: [zeusEmbed('Cycle Closed ⚡', summary)],
+      components: [],
+    });
   } catch (err) {
     console.error('[cycle-end] failed:', err);
-    return interaction.editReply({ content: `❌ Cycle end failed: ${err.message}` });
+    return interaction.editReply({ content: `❌ Cycle end failed: ${err.message}`, embeds: [], components: [] });
   }
 }
 
