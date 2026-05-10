@@ -19,6 +19,7 @@ const fs     = require('fs');
 const path   = require('path');
 const stats      = require('./stats');
 const attendance = require('./attendance');
+const security   = require('./security');
 
 const TIMEZONE = 'Asia/Manila';
 const PREFIX   = '$';
@@ -994,9 +995,113 @@ client.on(Events.MessageReactionAdd, (reaction, user) => {
 });
 
 // ─── CHAT ACTIVITY (silent, officer-only signal) ─────────────────────────────
-client.on(Events.MessageCreate, msg => {
+// Severity → embed color for security mod-log entries.
+const SECURITY_COLORS = {
+  log:               0xFFFF00,
+  delete:            0xFFA500,
+  'delete+timeout':  0xFF6600,
+  'purge+timeout':   0xFF0000,
+};
+
+const SECURITY_TITLES = {
+  log:               '🔍 Security flag (low confidence)',
+  delete:            '🛡️ Auto-deleted suspicious message',
+  'delete+timeout':  '🛡️ Auto-quarantined member (24h)',
+  'purge+timeout':   '🚨 Auto-purged & quarantined — likely compromised account',
+};
+
+async function handleSecurityAction(message, result) {
+  const log = getChannel(message.guild, CONFIG.modLogChannelName);
+  const purge = result.action === 'purge+timeout';
+  const shouldDelete = result.action !== 'log';
+  const shouldTimeout = result.action === 'delete+timeout' || purge;
+
+  if (shouldDelete) {
+    try { await message.delete(); } catch {}
+  }
+
+  if (purge) {
+    // Sweep the user's recent messages across every channel they posted in.
+    const recent = security.getRecentForUser(message.author.id);
+    for (const r of recent) {
+      if (r.messageId === message.id) continue;
+      const ch = message.guild.channels.cache.get(r.channelId);
+      if (!ch) continue;
+      try {
+        const m = await ch.messages.fetch(r.messageId);
+        if (m) await m.delete().catch(() => {});
+      } catch {}
+    }
+  }
+
+  if (shouldTimeout && message.member) {
+    try {
+      await message.member.timeout(24 * 60 * 60 * 1000, `Auto-quarantine (security score ${result.score})`);
+    } catch {}
+    try {
+      await message.author.send({ embeds: [zeusEmbed('⚠️ Your account may be compromised',
+        `A message you posted in **${message.guild.name}** was flagged as likely malware/phishing ` +
+        `(security score **${result.score}**) and removed. You've been timed out for 24 hours.\n\n` +
+        `**If you didn't intend to post a Discord invite or link**, treat this as a compromised-account incident:\n` +
+        `1. Change your Discord password.\n` +
+        `2. Log out all sessions (User Settings → Devices).\n` +
+        `3. Run an antivirus scan.\n` +
+        `4. Re-enable 2FA if it was disabled.\n\n` +
+        `Once your account is secure, contact a Zeus officer to lift the timeout.`,
+        0xFF0000
+      )] });
+    } catch {}
+  }
+
+  if (log) {
+    const safeContent = (message.content || '').slice(0, 600).replace(/`/g, 'ʹ');
+    log.send({
+      content: purge ? '@here Security alert — possible compromised account' : null,
+      embeds: [zeusEmbed(
+        SECURITY_TITLES[result.action] || '🔍 Security event',
+        `**User:** ${message.author.tag} (\`${message.author.id}\`)\n` +
+        `**Channel:** <#${message.channel.id}>\n` +
+        `**Score:** ${result.score}\n` +
+        `**Reasons:** ${result.reasons.join(', ') || '(none)'}\n` +
+        `**Content:**\n\`\`\`${safeContent || '(empty)'}\`\`\``,
+        SECURITY_COLORS[result.action] || 0xFFFF00
+      )],
+      allowedMentions: { parse: [] },
+    }).catch(() => {});
+  }
+
+  security.recordIncident({
+    userId: message.author.id,
+    userTag: message.author.tag,
+    channelId: message.channel.id,
+    messageId: message.id,
+    score: result.score,
+    reasons: result.reasons,
+    action: result.action,
+    contentSnippet: (message.content || '').slice(0, 240),
+  });
+}
+
+client.on(Events.MessageCreate, async msg => {
   if (msg.author?.bot) return;
   if (!msg.guild) return;
+
+  // Security scan: skip $-prefix commands so officer commands referencing
+  // scam domains (e.g. `$blockdomain dlscord.gg`) aren't self-flagged.
+  if (!msg.content?.startsWith(PREFIX)) {
+    try {
+      security.trackMessage(msg);
+      const result = security.evaluate(msg);
+      if (result.action !== 'none') {
+        await handleSecurityAction(msg, result);
+        // Auto-deleted spam shouldn't count as engagement.
+        if (result.action !== 'log') return;
+      }
+    } catch (e) {
+      console.log('[security] scan error:', e.message);
+    }
+  }
+
   // Skip slash command interactions; those don't fire MessageCreate anyway,
   // but $-prefix commands do. Track them as activity — using the bot is
   // engagement.
@@ -1836,6 +1941,16 @@ client.on('messageCreate', async message => {
       `\`$checkpatch\` — Manual patch check (Admin)\n\n` +
       `**🛡️ Moderation**\n` +
       `\`$kick\` \`$ban\` \`$mute\` \`$warn\` \`$clear\`\n\n` +
+      `**🔒 Security (anti-spam / anti-virus)**\n` +
+      `\`$scan @user\` — list a user's recent tracked messages\n` +
+      `\`$scan <text|url>\` — score a sample without acting\n` +
+      `\`$quarantine @user [reason]\` — 7-day timeout\n` +
+      `\`$unquarantine @user\` — lift timeout\n` +
+      `\`$blockdomain [domain]\` — block (or list) a malicious domain\n` +
+      `\`$trustdomain [domain]\` — allowlist (or list) a safe domain\n` +
+      `\`$unblockdomain <d>\` · \`$untrustdomain <d>\`\n` +
+      `\`$incidents [@user]\` — recent auto-flagged events\n` +
+      `_Auto-defense runs on every message: lookalike Discord links, scam keywords, crossposts, and new-account spam are deleted and the poster is auto-quarantined for 24h._\n\n` +
       `**🎮 Fun**\n` +
       `\`$roll\` \`$flip\` \`$trivia\` \`$8ball\` \`$rank\``
     )]});
@@ -2005,6 +2120,134 @@ client.on('messageCreate', async message => {
     await message.channel.bulkDelete(amount + 1, true);
     const r = await message.channel.send(`✅ Deleted **${amount}** messages.`);
     setTimeout(() => r.delete().catch(() => {}), 3000);
+  }
+
+  // ── $scan — manually evaluate text/url, or list a user's recent messages ──
+  if (command === 'scan') {
+    if (!message.member.permissions.has(PermissionFlagsBits.ManageMessages))
+      return message.reply('❌ Need **Manage Messages** permission.');
+    const target = message.mentions.members.first();
+    if (target) {
+      const recent = security.getRecentForUser(target.id);
+      if (recent.length === 0)
+        return message.reply(`No recent messages tracked for **${target.user.tag}** (10-minute window).`);
+      const lines = recent.slice(-10).map(r =>
+        `• <#${r.channelId}> — ${moment(r.ts).tz(TIMEZONE).format('HH:mm:ss')}`
+      );
+      return message.reply({ embeds: [zeusEmbed(
+        `Recent messages — ${target.user.tag}`,
+        lines.join('\n')
+      )] });
+    }
+    const text = args.join(' ');
+    if (!text) return message.reply('❌ Usage: `$scan @user` or `$scan <text or url>`');
+    const probe = {
+      content: text,
+      author: { id: '0', tag: 'probe', createdTimestamp: Date.now() },
+      member: { joinedTimestamp: Date.now() },
+      mentions: { everyone: false },
+      channel: { id: '0' },
+      id: '0',
+    };
+    const result = security.evaluate(probe);
+    const color = result.score >= 80 ? 0xFF0000 : result.score >= 50 ? 0xFFA500 : result.score >= 25 ? 0xFFFF00 : 0x00FF00;
+    return message.reply({ embeds: [zeusEmbed(
+      `🔍 Scan — score ${result.score}`,
+      `**Action that would trigger:** \`${result.action}\`\n` +
+      `**URLs:** ${result.urls.length ? result.urls.map(u => `\`${u}\``).join(', ') : '(none)'}\n` +
+      `**Reasons:** ${result.reasons.length ? result.reasons.join(', ') : '(none)'}`,
+      color
+    )] });
+  }
+
+  // ── $quarantine — 7-day timeout for officers ──────────────────────────────
+  if (command === 'quarantine') {
+    if (!message.member.permissions.has(PermissionFlagsBits.ModerateMembers))
+      return message.reply('❌ Need **Moderate Members** permission.');
+    const target = message.mentions.members.first();
+    if (!target) return message.reply('❌ Usage: `$quarantine @user [reason]`');
+    const reason = args.slice(1).join(' ') || 'Manual quarantine (officer)';
+    try {
+      await target.timeout(7 * 24 * 60 * 60 * 1000, reason);
+    } catch (e) {
+      return message.reply(`❌ Couldn't quarantine: ${e.message}`);
+    }
+    const embed = zeusEmbed('🛡️ Quarantined (7d)', `**${target.user.tag}** — ${reason}`, 0xFF6600);
+    const log = getChannel(message.guild, CONFIG.modLogChannelName);
+    if (log) log.send({ embeds: [embed] });
+    return message.reply({ embeds: [embed] });
+  }
+
+  // ── $unquarantine ─────────────────────────────────────────────────────────
+  if (command === 'unquarantine') {
+    if (!message.member.permissions.has(PermissionFlagsBits.ModerateMembers))
+      return message.reply('❌ Need **Moderate Members** permission.');
+    const target = message.mentions.members.first();
+    if (!target) return message.reply('❌ Usage: `$unquarantine @user`');
+    try { await target.timeout(null); }
+    catch (e) { return message.reply(`❌ Couldn't lift quarantine: ${e.message}`); }
+    const embed = zeusEmbed('✅ Unquarantined', `**${target.user.tag}** is back.`, 0x00FF00);
+    const log = getChannel(message.guild, CONFIG.modLogChannelName);
+    if (log) log.send({ embeds: [embed] });
+    return message.reply({ embeds: [embed] });
+  }
+
+  // ── $blockdomain / $unblockdomain / $trustdomain / $untrustdomain ─────────
+  if (command === 'blockdomain') {
+    if (!message.member.permissions.has(PermissionFlagsBits.ManageMessages))
+      return message.reply('❌ Need **Manage Messages** permission.');
+    if (!args[0]) {
+      const lists = security.loadDomainLists();
+      return message.reply({ embeds: [zeusEmbed('🚫 Blocked domains',
+        lists.blocked.length ? lists.blocked.map(d => `• \`${d}\``).join('\n') : '_(none)_')] });
+    }
+    const ok = security.addBlockDomain(args[0]);
+    return message.reply(ok ? `✅ Added \`${args[0]}\` to blocklist.` : `⚠️ \`${args[0]}\` already blocked.`);
+  }
+  if (command === 'unblockdomain') {
+    if (!message.member.permissions.has(PermissionFlagsBits.ManageMessages))
+      return message.reply('❌ Need **Manage Messages** permission.');
+    if (!args[0]) return message.reply('❌ Usage: `$unblockdomain <domain>`');
+    const ok = security.removeBlockDomain(args[0]);
+    return message.reply(ok ? `✅ Removed \`${args[0]}\` from blocklist.` : `⚠️ \`${args[0]}\` wasn't blocked.`);
+  }
+  if (command === 'trustdomain') {
+    if (!message.member.permissions.has(PermissionFlagsBits.ManageMessages))
+      return message.reply('❌ Need **Manage Messages** permission.');
+    if (!args[0]) {
+      const lists = security.loadDomainLists();
+      return message.reply({ embeds: [zeusEmbed('✅ Trusted domains',
+        lists.trusted.length ? lists.trusted.map(d => `• \`${d}\``).join('\n') : '_(none)_')] });
+    }
+    const ok = security.addTrustDomain(args[0]);
+    return message.reply(ok ? `✅ Added \`${args[0]}\` to trust list.` : `⚠️ \`${args[0]}\` already trusted.`);
+  }
+  if (command === 'untrustdomain') {
+    if (!message.member.permissions.has(PermissionFlagsBits.ManageMessages))
+      return message.reply('❌ Need **Manage Messages** permission.');
+    if (!args[0]) return message.reply('❌ Usage: `$untrustdomain <domain>`');
+    const ok = security.removeTrustDomain(args[0]);
+    return message.reply(ok ? `✅ Removed \`${args[0]}\` from trust list.` : `⚠️ \`${args[0]}\` wasn't trusted.`);
+  }
+
+  // ── $incidents — recent flagged events (optionally per user) ──────────────
+  if (command === 'incidents') {
+    if (!message.member.permissions.has(PermissionFlagsBits.ManageMessages))
+      return message.reply('❌ Need **Manage Messages** permission.');
+    const target = message.mentions.users.first();
+    const all = security.loadIncidents();
+    const filtered = target ? all.filter(i => i.userId === target.id) : all;
+    const last = filtered.slice(-15).reverse();
+    if (last.length === 0)
+      return message.reply(target ? `No incidents recorded for **${target.tag}**.` : 'No incidents recorded yet.');
+    const lines = last.map(i =>
+      `• \`${i.action}\` score **${i.score}** — **${i.userTag}** — ${moment(i.ts).tz(TIMEZONE).format('MMM DD HH:mm')}\n` +
+      `  ${i.reasons.slice(0, 4).join(', ')}`
+    );
+    return message.reply({ embeds: [zeusEmbed(
+      target ? `Incidents — ${target.tag}` : 'Recent security incidents',
+      lines.join('\n')
+    )] });
   }
 
   // ── $roll ─────────────────────────────────────────────────────────────────
