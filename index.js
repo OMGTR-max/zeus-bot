@@ -160,6 +160,24 @@ function getRole(guild, name) {
   return guild.roles.cache.find(r => r.name.toLowerCase() === name.toLowerCase());
 }
 
+// Resolve a target member from a command — accepts a real @mention OR a raw
+// user ID / `<@id>` form. Lets officers run `$quarantine`/`$scan`/`$incidents`
+// from a mod-only channel where the suspect isn't visible to @-autocomplete.
+async function resolveMemberByMentionOrId(message, rawArg) {
+  const m = message.mentions.members.first();
+  if (m) return m;
+  const id = String(rawArg || '').replace(/[<@!>]/g, '').trim();
+  if (!/^\d{15,20}$/.test(id)) return null;
+  return message.guild.members.fetch(id).catch(() => null);
+}
+async function resolveUserByMentionOrId(message, rawArg) {
+  const u = message.mentions.users.first();
+  if (u) return u;
+  const id = String(rawArg || '').replace(/[<@!>]/g, '').trim();
+  if (!/^\d{15,20}$/.test(id)) return null;
+  return message.client.users.fetch(id).catch(() => null);
+}
+
 // ─── ROLE MENTION HELPERS (uses hardcoded IDs for reliability) ───────────────
 
 // Ping both @shadow war core + @shadow war
@@ -1946,6 +1964,7 @@ client.on('messageCreate', async message => {
       `\`$scan <text|url>\` — score a sample without acting\n` +
       `\`$quarantine @user [reason]\` — 7-day timeout\n` +
       `\`$unquarantine @user\` — lift timeout\n` +
+      `_Tip: \`@user\` or raw user ID both work — use the ID (right-click → Copy ID) when running from a mod-only channel._\n` +
       `\`$blockdomain [domain]\` — block (or list) a malicious domain\n` +
       `\`$trustdomain [domain]\` — allowlist (or list) a safe domain\n` +
       `\`$unblockdomain <d>\` · \`$untrustdomain <d>\`\n` +
@@ -2126,7 +2145,7 @@ client.on('messageCreate', async message => {
   if (command === 'scan') {
     if (!message.member.permissions.has(PermissionFlagsBits.ManageMessages))
       return message.reply('❌ Need **Manage Messages** permission.');
-    const target = message.mentions.members.first();
+    const target = await resolveMemberByMentionOrId(message, args[0]);
     if (target) {
       const recent = security.getRecentForUser(target.id);
       if (recent.length === 0)
@@ -2164,8 +2183,8 @@ client.on('messageCreate', async message => {
   if (command === 'quarantine') {
     if (!message.member.permissions.has(PermissionFlagsBits.ModerateMembers))
       return message.reply('❌ Need **Moderate Members** permission.');
-    const target = message.mentions.members.first();
-    if (!target) return message.reply('❌ Usage: `$quarantine @user [reason]`');
+    const target = await resolveMemberByMentionOrId(message, args[0]);
+    if (!target) return message.reply('❌ Usage: `$quarantine @user [reason]` or `$quarantine <user-id> [reason]`');
     const reason = args.slice(1).join(' ') || 'Manual quarantine (officer)';
     try {
       await target.timeout(7 * 24 * 60 * 60 * 1000, reason);
@@ -2182,8 +2201,8 @@ client.on('messageCreate', async message => {
   if (command === 'unquarantine') {
     if (!message.member.permissions.has(PermissionFlagsBits.ModerateMembers))
       return message.reply('❌ Need **Moderate Members** permission.');
-    const target = message.mentions.members.first();
-    if (!target) return message.reply('❌ Usage: `$unquarantine @user`');
+    const target = await resolveMemberByMentionOrId(message, args[0]);
+    if (!target) return message.reply('❌ Usage: `$unquarantine @user` or `$unquarantine <user-id>`');
     try { await target.timeout(null); }
     catch (e) { return message.reply(`❌ Couldn't lift quarantine: ${e.message}`); }
     const embed = zeusEmbed('✅ Unquarantined', `**${target.user.tag}** is back.`, 0x00FF00);
@@ -2234,7 +2253,7 @@ client.on('messageCreate', async message => {
   if (command === 'incidents') {
     if (!message.member.permissions.has(PermissionFlagsBits.ManageMessages))
       return message.reply('❌ Need **Manage Messages** permission.');
-    const target = message.mentions.users.first();
+    const target = await resolveUserByMentionOrId(message, args[0]);
     const all = security.loadIncidents();
     const filtered = target ? all.filter(i => i.userId === target.id) : all;
     const last = filtered.slice(-15).reverse();
