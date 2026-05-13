@@ -897,12 +897,12 @@ async function handleLeaderboardCommand(interaction) {
     return interaction.reply({ content: '⚠️ No active cycle.', flags: MessageFlags.Ephemeral });
   }
   const cfg = attendance.loadConfig();
-  const lb  = attendance.buildLeaderboard(state, cfg.officerRoleIds, interaction.guild);
+  await interaction.deferReply();
+  const lb  = await attendance.buildLeaderboard(state, cfg.officerRoleIds, interaction.guild);
 
   if (lb.entries.length === 0) {
-    return interaction.reply({
+    return interaction.editReply({
       content: '📊 No attendance recorded yet for this cycle.',
-      flags: MessageFlags.Ephemeral,
     });
   }
 
@@ -913,11 +913,12 @@ async function handleLeaderboardCommand(interaction) {
     return `${medal} **${e.username}** — ${e.count}/${lb.max} (${pct}%)${off}`;
   });
 
-  return interaction.reply({
+  return interaction.editReply({
     embeds: [zeusEmbed(
       `Attendance Leaderboard — Week ${attendance.getCycleWeek(state, new Date()) || '—'}`,
       lines.join('\n') + `\n\n*Officers are tracked but excluded from member awards.*`
     )],
+    allowedMentions: { parse: [] },
   });
 }
 
