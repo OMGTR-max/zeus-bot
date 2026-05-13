@@ -240,12 +240,16 @@ function computeMaxEvents(state) {
 }
 
 // ─── ATTENDANCE RECORDING ─────────────────────────────────────────────────────
-function recordAttendance(userId, eventKey, eventDate) {
+function recordAttendance(userId, eventKey, eventDate, username = null) {
   const state = loadState();
   if (!state) return false;
   if (!state.attendance[userId]) {
     state.attendance[userId] = { count: 0, events: [] };
   }
+  // Stash latest known username so the leaderboard has a non-mention fallback
+  // when the member isn't in the bot's cache (uncached idle members render
+  // their raw `<@id>` mention as plain text inside an embed).
+  if (username) state.attendance[userId].username = username;
   const already = state.attendance[userId].events.some(
     e => e.key === eventKey && e.date === eventDate
   );
@@ -280,7 +284,8 @@ async function handleVoiceStateUpdate(oldState, newState) {
       // Existing credit logic preserved: first entry to war category during
       // an active event window earns the boolean +1 attendance.
       if (event) {
-        const recorded = recordAttendance(userId, event.key, event.eventDate);
+        const uname = newState.member?.displayName || newState.member?.user?.username || null;
+        const recorded = recordAttendance(userId, event.key, event.eventDate, uname);
         if (recorded) {
           const tag = newState.member?.user?.tag || userId;
           console.log(`[Attendance] ${tag} credited for ${event.def.name} (joined ${newCh.name})`);
@@ -421,7 +426,9 @@ async function handleCheckInReaction(reaction, user) {
     if (!checkIn) return;
     if (moment().isAfter(moment(checkIn.expiresAt))) return;
 
-    recordAttendance(user.id, checkIn.eventKey, checkIn.eventDate);
+    const member = reaction.message.guild?.members?.cache?.get(user.id);
+    const uname = member?.displayName || user.username || null;
+    recordAttendance(user.id, checkIn.eventKey, checkIn.eventDate, uname);
   } catch (e) {
     console.log('[Attendance] reaction handler error:', e.message);
   }
@@ -600,11 +607,15 @@ function getEngagementReport(guild, officerRoleIds = []) {
 }
 
 // ─── LEADERBOARD & WINNERS ────────────────────────────────────────────────────
-function buildLeaderboard(state, officerRoleIds = [], guild = null) {
+// Async: cache misses (idle members not yet seen by the bot) are filled via
+// guild.members.fetch so the leaderboard never falls back to a raw <@id>
+// mention — those render as literal text inside embeds and broke the display.
+async function buildLeaderboard(state, officerRoleIds = [], guild = null) {
   const max = computeMaxEvents(state);
   const entries = Object.entries(state.attendance || {}).map(([userId, data]) => ({
     userId,
-    username: `<@${userId}>`,
+    username: data.username || null,
+    storedUsername: data.username || null,
     count: data.count,
     percentage: max ? (data.count / max) * 100 : 0,
     isOfficer: false,
@@ -612,13 +623,23 @@ function buildLeaderboard(state, officerRoleIds = [], guild = null) {
 
   if (guild) {
     for (const entry of entries) {
-      const member = guild.members.cache.get(entry.userId);
+      let member = guild.members.cache.get(entry.userId);
+      if (!member) {
+        try { member = await guild.members.fetch(entry.userId); }
+        catch { member = null; }
+      }
       if (member) {
         entry.username = member.displayName || member.user.username;
         if (officerRoleIds.length) {
           entry.isOfficer = member.roles.cache.some(r => officerRoleIds.includes(r.id));
         }
+      } else if (!entry.username) {
+        entry.username = `Unknown member (${entry.userId})`;
       }
+    }
+  } else {
+    for (const entry of entries) {
+      if (!entry.username) entry.username = `<@${entry.userId}>`;
     }
   }
 
@@ -641,7 +662,7 @@ async function endCycle(guild) {
   if (!state) return { error: 'No active cycle to end.' };
   const cfg = loadConfig();
 
-  const leaderboard = buildLeaderboard(state, cfg.officerRoleIds, guild);
+  const leaderboard = await buildLeaderboard(state, cfg.officerRoleIds, guild);
   const winners = pickWinners(leaderboard);
 
   // Assign cycle award roles
