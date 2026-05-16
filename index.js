@@ -1110,7 +1110,7 @@ client.on(Events.MessageCreate, async msg => {
   if (!msg.content?.startsWith(PREFIX)) {
     try {
       security.trackMessage(msg);
-      const result = security.evaluate(msg);
+      const result = await security.evaluate(msg);
       if (result.action !== 'none') {
         await handleSecurityAction(msg, result);
         // Auto-deleted spam shouldn't count as engagement.
@@ -1969,8 +1969,10 @@ client.on('messageCreate', async message => {
       `\`$blockdomain [domain]\` — block (or list) a malicious domain\n` +
       `\`$trustdomain [domain]\` — allowlist (or list) a safe domain\n` +
       `\`$unblockdomain <d>\` · \`$untrustdomain <d>\`\n` +
+      `\`$allowinvite [invite]\` — allow (or list) an allied server's invites\n` +
+      `\`$unallowinvite <guild-id>\` — remove an allied server\n` +
       `\`$incidents [@user]\` — recent auto-flagged events\n` +
-      `_Auto-defense runs on every message: lookalike Discord links, scam keywords, crossposts, and new-account spam are deleted and the poster is auto-quarantined for 24h._\n\n` +
+      `_Auto-defense runs on every message: lookalike Discord links, foreign-server invites, scam keywords, crossposts, and new-account spam are deleted and the poster is auto-quarantined for 24h._\n\n` +
       `**🎮 Fun**\n` +
       `\`$roll\` \`$flip\` \`$trivia\` \`$8ball\` \`$rank\``
     )]});
@@ -2167,9 +2169,11 @@ client.on('messageCreate', async message => {
       member: { joinedTimestamp: Date.now() },
       mentions: { everyone: false },
       channel: { id: '0' },
+      client: message.client,
+      guild: message.guild,
       id: '0',
     };
-    const result = security.evaluate(probe);
+    const result = await security.evaluate(probe);
     const color = result.score >= 80 ? 0xFF0000 : result.score >= 50 ? 0xFFA500 : result.score >= 25 ? 0xFFFF00 : 0x00FF00;
     return message.reply({ embeds: [zeusEmbed(
       `🔍 Scan — score ${result.score}`,
@@ -2248,6 +2252,41 @@ client.on('messageCreate', async message => {
     if (!args[0]) return message.reply('❌ Usage: `$untrustdomain <domain>`');
     const ok = security.removeTrustDomain(args[0]);
     return message.reply(ok ? `✅ Removed \`${args[0]}\` from trust list.` : `⚠️ \`${args[0]}\` wasn't trusted.`);
+  }
+
+  // ── $allowinvite / $unallowinvite — allied-server invite allowlist ────────
+  // Invites to this server are always allowed automatically. These commands
+  // whitelist *other* (allied clan) servers by resolving an invite link to
+  // its guild ID. Any non-allied, non-self invite is flagged as spam.
+  if (command === 'allowinvite') {
+    if (!message.member.permissions.has(PermissionFlagsBits.ManageMessages))
+      return message.reply('❌ Need **Manage Messages** permission.');
+    if (!args[0]) {
+      const lists = security.loadDomainLists();
+      return message.reply({ embeds: [zeusEmbed('🤝 Allied servers (invites allowed)',
+        lists.alliedGuilds.length
+          ? lists.alliedGuilds.map(g => `• \`${g}\``).join('\n')
+          : '_(none — only invites to this server are auto-allowed)_')] });
+    }
+    const code = security.extractInviteCodes(args[0])[0] || args[0].trim();
+    let invite;
+    try { invite = await message.client.fetchInvite(code); }
+    catch { return message.reply(`❌ Couldn't resolve invite \`${code}\` — expired, invalid, or wrong code.`); }
+    const gid = invite?.guild?.id;
+    if (!gid) return message.reply('❌ That invite did not resolve to a server.');
+    if (gid === message.guild.id)
+      return message.reply('ℹ️ That invite points to *this* server — already allowed automatically.');
+    const ok = security.addAlliedGuild(gid);
+    return message.reply(ok
+      ? `✅ Allied server **${invite.guild?.name || gid}** (\`${gid}\`) — invites to it now allowed.`
+      : `⚠️ **${invite.guild?.name || gid}** is already on the allied list.`);
+  }
+  if (command === 'unallowinvite') {
+    if (!message.member.permissions.has(PermissionFlagsBits.ManageMessages))
+      return message.reply('❌ Need **Manage Messages** permission.');
+    if (!args[0]) return message.reply('❌ Usage: `$unallowinvite <guild-id>`');
+    const ok = security.removeAlliedGuild(args[0]);
+    return message.reply(ok ? `✅ Removed \`${args[0]}\` from the allied list.` : `⚠️ \`${args[0]}\` wasn't on the allied list.`);
   }
 
   // ── $incidents — recent flagged events (optionally per user) ──────────────
