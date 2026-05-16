@@ -37,13 +37,14 @@ const DEFAULT_BLOCKED = [
 function loadDomainLists() {
   const stored = safeReadJSON(DOMAIN_LISTS_FILE, null);
   if (!stored) {
-    const init = { trusted: DEFAULT_TRUSTED.slice(), blocked: DEFAULT_BLOCKED.slice() };
+    const init = { trusted: DEFAULT_TRUSTED.slice(), blocked: DEFAULT_BLOCKED.slice(), alliedGuilds: [] };
     saveDomainLists(init);
     return init;
   }
   return {
     trusted: Array.isArray(stored.trusted) ? stored.trusted : DEFAULT_TRUSTED.slice(),
     blocked: Array.isArray(stored.blocked) ? stored.blocked : DEFAULT_BLOCKED.slice(),
+    alliedGuilds: Array.isArray(stored.alliedGuilds) ? stored.alliedGuilds : [],
   };
 }
 function saveDomainLists(lists) {
@@ -95,6 +96,41 @@ function parseHost(rawUrl) {
     const withProto = /^https?:\/\//i.test(rawUrl) ? rawUrl : 'http://' + rawUrl;
     return new URL(withProto).hostname.toLowerCase();
   } catch { return null; }
+}
+
+// ─── DISCORD INVITE EXTRACTION ───────────────────────────────────────────────
+// `discord.gg` is a *trusted domain*, but an invite to an arbitrary server is
+// itself a spam vector. Extract the invite code so it can be resolved against
+// the API and compared to the server the message was posted in.
+const INVITE_REGEX = /(?:https?:\/\/)?(?:www\.)?(?:discord\.gg|discord(?:app)?\.com\/invite|discord\.gg\/invite)\/([a-z0-9-]+)/gi;
+
+function extractInviteCodes(text) {
+  if (!text) return [];
+  const codes = new Set();
+  const re = new RegExp(INVITE_REGEX.source, 'gi');
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    if (m[1]) codes.add(m[1]);
+  }
+  return [...codes];
+}
+
+// Resolve an invite code to a verdict via the Discord API:
+//   'self'       → points to the guild the message was posted in (always ok)
+//   'allied'     → points to a guild on the officer-managed allowlist
+//   'foreign'    → points to some other server (spam vector)
+//   'unresolved' → expired / invalid / API error (a dead link, harmless)
+async function classifyInvite(client, code, currentGuildId) {
+  if (!client || typeof client.fetchInvite !== 'function') return 'unresolved';
+  let invite;
+  try { invite = await client.fetchInvite(code); }
+  catch { return 'unresolved'; }
+  const gid = invite?.guild?.id;
+  if (!gid) return 'unresolved';
+  if (currentGuildId && gid === currentGuildId) return 'self';
+  const lists = loadDomainLists();
+  if (lists.alliedGuilds.includes(gid)) return 'allied';
+  return 'foreign';
 }
 
 // ─── DETECTION TABLES ────────────────────────────────────────────────────────
@@ -203,7 +239,7 @@ function getRecentForUser(uid) {
 }
 
 // ─── SCORING ─────────────────────────────────────────────────────────────────
-function evaluate(message) {
+async function evaluate(message) {
   const reasons = [];
   let score = 0;
   const text = message.content || '';
@@ -220,8 +256,21 @@ function evaluate(message) {
     return { score: 0, reasons: [], action: 'none', urls: [] };
   }
 
-  // If every host is on the trust list, short-circuit.
-  if (hosts.every(h => matchesList(h, lists.trusted))) {
+  // Resolve any Discord invite links against the API. A foreign-server invite
+  // is flagged even though `discord.gg` is a trusted domain.
+  let foreignInvite = false;
+  for (const code of extractInviteCodes(text)) {
+    const verdict = await classifyInvite(message.client, code, message.guild?.id);
+    if (verdict === 'foreign') {
+      foreignInvite = true;
+      score += 60;
+      reasons.push(`foreign-discord-invite:${code}`);
+    }
+  }
+
+  // If every host is on the trust list AND no foreign invite was found,
+  // short-circuit. A foreign invite forces full scoring even on discord.gg.
+  if (!foreignInvite && hosts.every(h => matchesList(h, lists.trusted))) {
     return { score: 0, reasons: ['all-trusted'], action: 'none', urls: hosts };
   }
 
@@ -361,6 +410,29 @@ function removeTrustDomain(domain) {
   return true;
 }
 
+// ─── ALLIED-GUILD ALLOWLIST ──────────────────────────────────────────────────
+// Whitelist a partner clan's server (by guild ID) so invites to it pass.
+// `$allowinvite` accepts an invite link/code; index.js resolves it to a
+// guild ID via the API before calling this.
+function addAlliedGuild(guildId) {
+  const id = String(guildId || '').trim();
+  if (!/^\d{15,20}$/.test(id)) return false;
+  const lists = loadDomainLists();
+  if (lists.alliedGuilds.includes(id)) return false;
+  lists.alliedGuilds.push(id);
+  saveDomainLists(lists);
+  return true;
+}
+function removeAlliedGuild(guildId) {
+  const id = String(guildId || '').trim();
+  const lists = loadDomainLists();
+  const before = lists.alliedGuilds.length;
+  lists.alliedGuilds = lists.alliedGuilds.filter(x => x !== id);
+  if (lists.alliedGuilds.length === before) return false;
+  saveDomainLists(lists);
+  return true;
+}
+
 module.exports = {
   evaluate,
   trackMessage,
@@ -372,5 +444,8 @@ module.exports = {
   removeBlockDomain,
   addTrustDomain,
   removeTrustDomain,
+  extractInviteCodes,
+  addAlliedGuild,
+  removeAlliedGuild,
   RECENT_WINDOW_MS,
 };
