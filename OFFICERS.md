@@ -27,7 +27,7 @@ flowchart TD
     subgraph T3[" Tier 3 — Community & Recruitment "]
         Mana["Manawari<br/>Discord Ops<br/>+ Bot Monitoring"]
         xIcy["xIcy<br/>Recruitment<br/>+ In-Game Reminders"]
-        Nali["Nalimotko<br/>Event Prizes"]
+        Nali["Eloisa<br/>Event Prizes"]
         Akosi["AkosiMK<br/>Stats + Roster<br/>Backup"]
     end
 
@@ -56,7 +56,7 @@ flowchart TD
 - [ ] Bot owner of record (delegates day-to-day to Menelaus)
 - [ ] Receives bug reports from Manawari
 - [ ] Monitor in-game behavior, relationships, factions
-- [ ] Backup for Nalimotko on prize coordination
+- [ ] Backup for Eloisa on prize coordination
 
 ### Menelaus — Clan Relations + Bot Owner
 - [ ] Maintain alliance contact + internal affairs
@@ -114,7 +114,7 @@ flowchart TD
 - [ ] Recruitment + social media campaigns
 - [ ] Shadow War in-game reminders (uses lineup from Clan Leader)
 
-### Nalimotko — Event Prize Coordinator
+### Eloisa — Event Prize Coordinator
 - [ ] Manage event prize pool
 - [ ] Record winners (event log)
 
@@ -146,7 +146,7 @@ flowchart TD
     subgraph EXT[External Events — with other clans]
         E1[Ynaguinid<br/>schedules + contacts external clans]
         E2[Manawari<br/>runs event on the day]
-        E3[Nalimotko<br/>handles prizes]
+        E3[Eloisa<br/>handles prizes]
         E4[👑 Leader<br/>prize backup]
         E1 --> E2 --> E3 --> E4
     end
@@ -154,7 +154,7 @@ flowchart TD
     subgraph INT[Internal Events — clan-only]
         I1[NowhereMan<br/>proposes + runs]
         I2[Manawari<br/>Discord facilitation]
-        I3[Nalimotko<br/>prizes if applicable]
+        I3[Eloisa<br/>prizes if applicable]
         I1 --> I2 --> I3
     end
 ```
@@ -165,7 +165,7 @@ flowchart TD
 | Scheduling | After regular war calendar | Anytime, around clan health |
 | Outside contact | Yes (other clans) | No |
 | Discord facilitation | Manawari | Manawari |
-| Prizes | Nalimotko (👑 Leader backup) | Nalimotko (if applicable) |
+| Prizes | Eloisa (👑 Leader backup) | Eloisa (if applicable) |
 
 ---
 
