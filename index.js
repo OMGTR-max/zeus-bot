@@ -1382,7 +1382,7 @@ async function handleOfficersCommand(interaction) {
     .addFields(
       { name: 'Manawari — Discord Ops + Bot Monitoring', value: '• Discord moderation + activity\n• Event facilitation\n• Bot suggestions/bugs → Clan Leader' },
       { name: 'xIcy — Recruitment + In-Game Reminders', value: '• Recruitment + social media\n• Shadow War in-game reminders (lineup from Leader)' },
-      { name: 'Nalimotko — Event Prizes', value: '• Prize pool + winner records' },
+      { name: 'Eloisa — Event Prizes', value: '• Prize pool + winner records' },
       { name: 'AkosiMK — Stats + Roster Backup', value: '• Manual stat updates (backup for `$updatemystats`)\n• Roster co-maintenance with Pau\n• Periodic stat audits / drift checks' },
     );
 
@@ -1391,8 +1391,8 @@ async function handleOfficersCommand(interaction) {
     .setTitle('🔄 Workflows & Monitoring')
     .addFields(
       { name: 'Shadow War', value: 'Menelaus drafts → 👑 Leader approves → xIcy reminds in-game → Pandapple/Pau execute → Pau logs attendance' },
-      { name: 'External Events', value: 'Ynaguinid schedules → Manawari runs → Nalimotko prizes' },
-      { name: 'Internal Events', value: 'NowhereMan runs → Manawari facilitates → Nalimotko (if prizes)' },
+      { name: 'External Events', value: 'Ynaguinid schedules → Manawari runs → Eloisa prizes' },
+      { name: 'Internal Events', value: 'NowhereMan runs → Manawari facilitates → Eloisa (if prizes)' },
       { name: 'Who Watches What', value: '• War attendance → **Pau**\n• Morale/engagement → **NowhereMan**\n• Discord activity → **Manawari**\n• In-game behavior → 👑 **Leader**\n• Stats / roster → **AkosiMK** (with Pau)' },
     )
     .setFooter({ text: 'Zeus Clan | SEA Bloodraven | Diablo Immortal' })
