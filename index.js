@@ -81,6 +81,7 @@ const ANNOUNCEMENT_TYPES = {
 const ROLE_IDS = {
   shadowWar:     '1492377915839742043', // @shadow war
   shadowWarCore: '1492380088103211159', // @shadow war core
+  vault:         '1518298984794296320', // @vault — daily vault defense/raid pings
   stronkpeople:  '',                    // ← paste your @stronkpeople Role ID here
 };
 
@@ -199,6 +200,11 @@ function getStronkMention(guild) {
   // Fallback to name-based search if ID not set yet
   const role = getRole(guild, 'stronkpeople');
   return role ? `<@&${role.id}>` : '@everyone';
+}
+
+// Ping @vault (daily vault defense/raid alerts, Mon-Sat noon + 7 PM windows)
+function getVaultMention(guild) {
+  return ROLE_IDS.vault ? `<@&${ROLE_IDS.vault}>` : null;
 }
 
 // ─── ANNOUNCEMENT HANDLER (shared by slash command modal) ─────────────────────
@@ -1428,7 +1434,7 @@ async function runJob(jobId, fn) {
 }
 function getCatchupTargets() {
   // dow: 0=Sun .. 6=Sat. fn must be idempotent-safe at the minute level.
-  return [
+  const targets = [
     { id: 'thu-core',           dow: 4, hour: 18, minute: 45, fn: () => client.guilds.cache.forEach(g => sendCoreEarlyAlert(g, 'Thursday')) },
     { id: 'thu-warn30',         dow: 4, hour: 19, minute: 0,  fn: () => client.guilds.cache.forEach(g => sendWarWarning(g, 'Thursday')) },
     { id: 'thu-final',          dow: 4, hour: 19, minute: 25, fn: () => client.guilds.cache.forEach(g => sendFinalCall(g)) },
@@ -1441,6 +1447,14 @@ function getCatchupTargets() {
     { id: 'shadow-war-checkin', dow: 6, hour: 19, minute: 30, fn: runShadowWarCheckin },
     { id: 'vob-checkin',        dow: 0, hour: 20, minute: 0,  fn: runVobCheckin },
   ];
+  // Vault: Mon-Sat, two windows daily. Pre-window ping (11:55 / 18:55) fires
+  // the combined alert + check-in embed; id includes the dow so runMissedAlerts
+  // can independently track each day's noon/evening fire.
+  for (const dow of [1, 2, 3, 4, 5, 6]) {
+    targets.push({ id: `vault-noon-${dow}`,    dow, hour: 11, minute: 55, fn: () => runVaultCheckin('vault_noon') });
+    targets.push({ id: `vault-evening-${dow}`, dow, hour: 18, minute: 55, fn: () => runVaultCheckin('vault_evening') });
+  }
+  return targets;
 }
 function runMissedAlerts() {
   const log = safeReadJSON(LAST_FIRED_FILE, {});
@@ -1477,10 +1491,32 @@ function runVobCheckin() {
     console.log('[Attendance] check-in post error:', e.message)
   );
 }
+// Vault Defense (Immortals) / Vault Raid (Shadows) — daily Mon-Sat at noon
+// and 7 PM. The single 5-min pre-window cron fires a combined ping + check-in
+// embed (vault windows are only 60 min, so a separate alert + check-in post
+// would just clutter the channel).
+function runVaultCheckin(eventKey) {
+  const state = attendance.getCurrentCycle();
+  if (!state) return;
+  // Resolve the @vault mention from any guild the bot is in (it's a
+  // hardcoded global role ID, so the first guild's reference is fine).
+  const firstGuild = client.guilds.cache.first();
+  const roleMention = firstGuild ? getVaultMention(firstGuild) : null;
+  return attendance.postCheckInMessage(client, eventKey, {
+    roleMention,
+    leadMinutes: 5,
+  }).catch(e =>
+    console.log('[Attendance] vault check-in post error:', e.message)
+  );
+}
 function scheduleAttendanceCheckIns() {
-  safeCron('30 19 * * 4,6', () => runJob('shadow-war-checkin', runShadowWarCheckin), { timezone: TIMEZONE });
-  safeCron('0 20 * * 0',    () => runJob('vob-checkin',         runVobCheckin),       { timezone: TIMEZONE });
-  console.log('✅ Attendance check-in cron scheduled (Thu/Sat 19:30 + Sun 20:00 PHT)');
+  safeCron('30 19 * * 4,6',  () => runJob('shadow-war-checkin', runShadowWarCheckin),                  { timezone: TIMEZONE });
+  safeCron('0 20 * * 0',     () => runJob('vob-checkin',         runVobCheckin),                       { timezone: TIMEZONE });
+  // Vault: 11:55 (noon window) and 18:55 (evening window), Mon-Sat. Job id
+  // includes the dow so each day's fire has an independent last-fired stamp.
+  safeCron('55 11 * * 1-6',  () => runJob(`vault-noon-${moment().tz(TIMEZONE).day()}`,    () => runVaultCheckin('vault_noon')),     { timezone: TIMEZONE });
+  safeCron('55 18 * * 1-6',  () => runJob(`vault-evening-${moment().tz(TIMEZONE).day()}`, () => runVaultCheckin('vault_evening')),  { timezone: TIMEZONE });
+  console.log('✅ Attendance check-in cron scheduled (Thu/Sat 19:30 SW + Sun 20:00 VoB + Mon-Sat 11:55/18:55 Vault PHT)');
 }
 
 // Process-level safety net — never crash on a stray rejection.

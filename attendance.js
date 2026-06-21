@@ -14,6 +14,9 @@ const STATE_FILE   = dataPath('.attendance.json');
 const HISTORY_FILE = dataPath('.attendance_history.json');
 
 // Event window definitions (Asia/Manila local time)
+// `checkInExpiryMinutes` — how long the react-to-claim embed stays valid
+//   after it's posted. Defaults to 15 if omitted (matches Shadow War / VoB
+//   tradition). Vault windows use 65 (5 min lead + 60 min window).
 const EVENT_DEFINITIONS = {
   shadow_war: {
     name: 'Shadow War',
@@ -29,7 +32,35 @@ const EVENT_DEFINITIONS = {
     startTime: '19:55',
     endTime:   '21:30',
   },
+  // Daily-vault. Two windows per day Mon-Sat; bot fires a check-in embed
+  // 5 min before each window. Faction picks the display name at render
+  // time: Immortals defend their vault, Shadows raid the other side's.
+  vault_noon: {
+    name: 'Vault Defense',
+    icon: '🛡️',
+    days: [1, 2, 3, 4, 5, 6],   // Mon-Sat
+    startTime: '12:00',
+    endTime:   '13:00',
+    checkInExpiryMinutes: 65,
+  },
+  vault_evening: {
+    name: 'Vault Defense',
+    icon: '🛡️',
+    days: [1, 2, 3, 4, 5, 6],
+    startTime: '19:00',
+    endTime:   '20:00',
+    checkInExpiryMinutes: 65,
+  },
 };
+
+// Convenience predicate used in a few places. Vault display name depends on
+// faction; everything else uses def.name.
+function isVaultEvent(eventKey) {
+  return eventKey === 'vault_noon' || eventKey === 'vault_evening';
+}
+function vaultDisplayName(faction) {
+  return faction === 'shadows' ? 'Vault Raid' : 'Vault Defense';
+}
 
 // ─── PERSISTENCE ──────────────────────────────────────────────────────────────
 function defaultConfig() {
@@ -202,9 +233,11 @@ function isEventTracked(state, eventKey, week) {
   if (state.faction === 'shadows') {
     if (eventKey === 'shadow_war') return week >= 1 && week <= 7;
     if (eventKey === 'vob')        return week >= 1 && week <= 3;
+    if (isVaultEvent(eventKey))    return week >= 1 && week <= state.durationWeeks;
   }
   if (state.faction === 'immortals') {
     if (eventKey === 'vob')        return week >= 1 && week <= 3;
+    if (isVaultEvent(eventKey))    return week >= 1 && week <= state.durationWeeks;
   }
   return false;
 }
@@ -234,8 +267,10 @@ function getActiveEvent(now = new Date()) {
 // Compute total possible events for a cycle (for percentage math)
 function computeMaxEvents(state) {
   if (!state) return 0;
-  if (state.faction === 'shadows')   return 14 + 3; // 7w × (Thu+Sat) + 3 VoB
-  if (state.faction === 'immortals') return 3;
+  // Vault Defense/Raid: 6 days × 2 windows × cycle weeks
+  const vault = (state.durationWeeks || 0) * 6 * 2;
+  if (state.faction === 'shadows')   return 14 + 3 + vault; // 7w × (Thu+Sat) + 3 VoB + vault
+  if (state.faction === 'immortals') return 3 + vault;       // 3 VoB + vault
   return 0;
 }
 
@@ -364,7 +399,12 @@ function clearStaleVoiceSessions() {
 }
 
 // ─── REACT-TO-CLAIM ───────────────────────────────────────────────────────────
-async function postCheckInMessage(client, eventKey) {
+// options:
+//   roleMention   — string like '<@&123...>' prepended to embed content for ping
+//   leadMinutes   — if >0, message says "starts in N minutes" (vault pre-window
+//                   alert combines warning + check-in into one post)
+async function postCheckInMessage(client, eventKey, options = {}) {
+  const { roleMention = null, leadMinutes = 0 } = options;
   const cfg = loadConfig();
   if (!cfg.checkInChannelId) {
     console.log('[Attendance] No check-in channel configured; skipping post.');
@@ -380,25 +420,36 @@ async function postCheckInMessage(client, eventKey) {
   if (!channel) return null;
 
   const eventDate = moment().tz(TIMEZONE).format('YYYY-MM-DD');
+  const expiryMin = def.checkInExpiryMinutes ?? 15;
+  const displayName = isVaultEvent(eventKey) ? vaultDisplayName(state.faction) : def.name;
+
+  const lines = [];
+  if (leadMinutes > 0) {
+    lines.push(`🛡️ **${displayName} starts in ${leadMinutes} minutes** — window: **${def.startTime}–${def.endTime} PHT**`);
+  }
+  lines.push(`React with 🛡️ within **${expiryMin} minutes** to claim attendance.`);
+  lines.push(`Or join the war voice channel — you'll be credited automatically.`);
+  lines.push(`**Cycle Week ${week} of ${state.durationWeeks}** | Faction: **${state.faction.toUpperCase()}**`);
+
   const embed = new EmbedBuilder()
-    .setTitle(`${def.icon} ${def.name} — Attendance Check-In`)
-    .setDescription(
-      `React with 🛡️ within **15 minutes** to claim attendance.\n\n` +
-      `Or join the war voice channel — you'll be credited automatically.\n\n` +
-      `**Cycle Week ${week} of ${state.durationWeeks}** | Faction: **${state.faction.toUpperCase()}**`
-    )
+    .setTitle(`${def.icon} ${displayName} — Attendance Check-In`)
+    .setDescription(lines.join('\n\n'))
     .setColor(0xFFD700)
     .setFooter({ text: 'Zeus Clan Attendance Tracker' })
     .setTimestamp();
 
-  const msg = await channel.send({ embeds: [embed] });
+  const msg = await channel.send({
+    content: roleMention || undefined,
+    embeds: [embed],
+    allowedMentions: roleMention ? { parse: ['roles'] } : undefined,
+  });
   try { await msg.react('🛡️'); } catch {}
 
   // Re-load state after the await — a voice/reaction event during
   // channel.send could have written to it, so don't clobber.
   const fresh = loadState();
   if (!fresh) return msg;
-  const expiresAt = moment().tz(TIMEZONE).add(15, 'minutes').toISOString();
+  const expiresAt = moment().tz(TIMEZONE).add(expiryMin, 'minutes').toISOString();
   fresh.checkInMessages.push({
     messageId: msg.id,
     channelId: msg.channel.id,
@@ -408,7 +459,7 @@ async function postCheckInMessage(client, eventKey) {
   });
   saveState(fresh);
 
-  setTimeout(() => closeCheckIn(msg.id), 15 * 60 * 1000);
+  setTimeout(() => closeCheckIn(msg.id), expiryMin * 60 * 1000);
   return msg;
 }
 
