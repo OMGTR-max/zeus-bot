@@ -41,7 +41,7 @@ const EVENT_DEFINITIONS = {
     days: [1, 2, 3, 4, 5, 6],   // Mon-Sat
     startTime: '12:00',
     endTime:   '13:00',
-    checkInExpiryMinutes: 65,
+    checkInExpiryMinutes: 15,
   },
   vault_evening: {
     name: 'Vault Defense',
@@ -49,7 +49,7 @@ const EVENT_DEFINITIONS = {
     days: [1, 2, 3, 4, 5, 6],
     startTime: '19:00',
     endTime:   '20:00',
-    checkInExpiryMinutes: 65,
+    checkInExpiryMinutes: 15,
   },
 };
 
@@ -60,6 +60,23 @@ function isVaultEvent(eventKey) {
 }
 function vaultDisplayName(faction) {
   return faction === 'shadows' ? 'Vault Raid' : 'Vault Defense';
+}
+
+// MVP / Storm Bearer / Lightning Striker rank by *weighted* attendance.
+// Raw count is preserved on each entry for "X events attended" display, but
+// the sort key is the weighted score. VoB is rare (3 per cycle) so it's
+// weighted heavily — without that, vault grinders would always beat VoB
+// regulars on Immortals cycles (84 vault events × 1 = 84 > 3 VoB × 10 = 30).
+// At 30 pts, 1 VoB ≈ 10 vault credits, so the war event stays the decider.
+const EVENT_WEIGHTS = {
+  shadow_war:    10,
+  vob:           30,
+  vault_noon:     1,
+  vault_evening:  1,
+};
+function computeWeightedScore(events) {
+  if (!Array.isArray(events)) return 0;
+  return events.reduce((sum, ev) => sum + (EVENT_WEIGHTS[ev.key] ?? 1), 0);
 }
 
 // ─── PERSISTENCE ──────────────────────────────────────────────────────────────
@@ -271,6 +288,17 @@ function computeMaxEvents(state) {
   const vault = (state.durationWeeks || 0) * 6 * 2;
   if (state.faction === 'shadows')   return 14 + 3 + vault; // 7w × (Thu+Sat) + 3 VoB + vault
   if (state.faction === 'immortals') return 3 + vault;       // 3 VoB + vault
+  return 0;
+}
+
+// Weighted maximum used by buildLeaderboard for percentage display and as
+// the implicit "100%" mark for MVP ranking. Shadows perfect = 14×10 (SW) +
+// 3×30 (VoB) + 84×1 (vault) = 314. Immortals perfect = 3×30 + 84×1 = 174.
+function computeMaxScore(state) {
+  if (!state) return 0;
+  const vault = (state.durationWeeks || 0) * 6 * 2 * EVENT_WEIGHTS.vault_noon;
+  if (state.faction === 'shadows')   return 14 * EVENT_WEIGHTS.shadow_war + 3 * EVENT_WEIGHTS.vob + vault;
+  if (state.faction === 'immortals') return 3 * EVENT_WEIGHTS.vob + vault;
   return 0;
 }
 
@@ -663,14 +691,23 @@ function getEngagementReport(guild, officerRoleIds = []) {
 // mention — those render as literal text inside embeds and broke the display.
 async function buildLeaderboard(state, officerRoleIds = [], guild = null) {
   const max = computeMaxEvents(state);
-  const entries = Object.entries(state.attendance || {}).map(([userId, data]) => ({
-    userId,
-    username: data.username || null,
-    storedUsername: data.username || null,
-    count: data.count,
-    percentage: max ? (data.count / max) * 100 : 0,
-    isOfficer: false,
-  }));
+  const maxScore = computeMaxScore(state);
+  const entries = Object.entries(state.attendance || {}).map(([userId, data]) => {
+    const score = computeWeightedScore(data.events || []);
+    return {
+      userId,
+      username: data.username || null,
+      storedUsername: data.username || null,
+      count: data.count,
+      score,
+      // Percentage is now of the *weighted* max so the bar reflects MVP
+      // race position, not raw event count. A vault-only attendee tops out
+      // around 33% even with full vault attendance; a VoB regular passes
+      // them with just 3 VoB credits.
+      percentage: maxScore ? (score / maxScore) * 100 : 0,
+      isOfficer: false,
+    };
+  });
 
   if (guild) {
     for (const entry of entries) {
@@ -694,8 +731,13 @@ async function buildLeaderboard(state, officerRoleIds = [], guild = null) {
     }
   }
 
-  entries.sort((a, b) => b.count - a.count || b.percentage - a.percentage);
-  return { max, entries };
+  // MVP ranking: weighted score first, raw count tiebreak, then percentage.
+  entries.sort((a, b) =>
+    (b.score - a.score) ||
+    (b.count - a.count) ||
+    (b.percentage - a.percentage)
+  );
+  return { max, maxScore, entries };
 }
 
 function pickWinners(leaderboard) {

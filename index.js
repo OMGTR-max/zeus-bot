@@ -916,13 +916,16 @@ async function handleLeaderboardCommand(interaction) {
     const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `\`${String(i + 1).padStart(2)}\``;
     const off = e.isOfficer ? ' *(officer)*' : '';
     const pct = e.percentage.toFixed(0);
-    return `${medal} **${e.username}** — ${e.count}/${lb.max} (${pct}%)${off}`;
+    // MVP race: weighted score (with raw event count as secondary info).
+    // VoB = 30 pts, Shadow War = 10 pts, Vault = 1 pt.
+    return `${medal} **${e.username}** — **${e.score}** pts · ${e.count} events (${pct}%)${off}`;
   });
 
   return interaction.editReply({
     embeds: [zeusEmbed(
       `Attendance Leaderboard — Week ${attendance.getCycleWeek(state, new Date()) || '—'}`,
-      lines.join('\n') + `\n\n*Officers are tracked but excluded from member awards.*`
+      lines.join('\n') +
+      `\n\n*Weighted score: VoB = 30 pts, Shadow War = 10 pts, Vault = 1 pt. Officers excluded from awards.*`
     )],
     allowedMentions: { parse: [] },
   });
@@ -979,16 +982,17 @@ async function executeCycleEnd(interaction) {
 
     const { winners, leaderboard, faction } = result;
     const fmtWinner = (w) => w
-      ? `**${w.username}** — ${w.count}/${leaderboard.max} (${w.percentage.toFixed(0)}%)${w.becameVeteran ? ' 🏛️ *Veteran of Zeus*' : ''}`
+      ? `**${w.username}** — **${w.score}** pts · ${w.count} events (${w.percentage.toFixed(0)}%)${w.becameVeteran ? ' 🏛️ *Veteran of Zeus*' : ''}`
       : '*(no eligible member)*';
 
     const summary =
       `**Faction:** ${faction.toUpperCase()}\n` +
-      `**Total events:** ${leaderboard.max}\n` +
+      `**Max possible:** ${leaderboard.maxScore} pts (${leaderboard.max} events)\n` +
       `**Members tracked:** ${leaderboard.entries.length}\n\n` +
       `🥇 **Cycle MVP** — ${fmtWinner(winners.mvp)}\n` +
       `🥈 **Storm Bearer** — ${fmtWinner(winners.stormBearer)}\n` +
       `🥉 **Lightning Striker** — ${fmtWinner(winners.lightningStriker)}\n\n` +
+      `*Weighted: VoB = 30 pts, Shadow War = 10 pts, Vault = 1 pt.*\n` +
       `Cycle archived. Start the next one with \`/cycle-start\`. ⚡`;
 
     const cfg = attendance.loadConfig();
