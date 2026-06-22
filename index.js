@@ -1459,8 +1459,16 @@ function getCatchupTargets() {
 function runMissedAlerts() {
   const log = safeReadJSON(LAST_FIRED_FILE, {});
   const now = moment().tz(TIMEZONE);
+  const state = attendance.getCurrentCycle();
+  const shadowsActive = !!(state && state.faction === 'shadows');
+  // SW catchup targets (everything except vault-* and vob-checkin) only
+  // re-fire during a Shadows cycle, so a redeploy during Immortals doesn't
+  // replay missed shadow-war alerts at members on the wrong faction.
+  const isShadowWarTarget = (id) =>
+    id.startsWith('thu-') || id.startsWith('sat-') || id === 'shadow-war-checkin';
   for (const t of getCatchupTargets()) {
     if (now.day() !== t.dow) continue;
+    if (isShadowWarTarget(t.id) && !shadowsActive) continue;
     const scheduled = moment().tz(TIMEZONE).hour(t.hour).minute(t.minute).second(0).millisecond(0);
     if (now.isBefore(scheduled)) continue;
     if (now.diff(scheduled, 'minutes') > CATCHUP_WINDOW_MIN) continue;
@@ -1785,8 +1793,17 @@ function safeCron(pattern, fn, opts) {
 function scheduleReminders() {
   const guilds = () => client.guilds.cache;
 
+  // SW-themed reminders only fire during a Shadows cycle. With Immortals
+  // reigning (or no active cycle), the cron callback exits early instead
+  // of spamming shadow-war content at members on a non-shadow week.
+  const shadowsActive = () => {
+    const state = attendance.getCurrentCycle();
+    return !!(state && state.faction === 'shadows');
+  };
+
   // Monday 9 AM — sign-ups open (all war roles)
   safeCron('0 9 * * 1', () => {
+    if (!shadowsActive()) return;
     guilds().forEach(guild => {
       const ch = getChannel(guild, CONFIG.shadowWarChannelName);
       if (!ch) return;
@@ -1804,17 +1821,18 @@ function scheduleReminders() {
   }, { timezone: TIMEZONE });
 
   // ── THURSDAY ──
-  safeCron('45 18 * * 4', () => runJob('thu-core',    () => guilds().forEach(g => sendCoreEarlyAlert(g, 'Thursday'))), { timezone: TIMEZONE });
-  safeCron('0 19 * * 4',  () => runJob('thu-warn30',  () => guilds().forEach(g => sendWarWarning(g, 'Thursday'))),     { timezone: TIMEZONE });
-  safeCron('25 19 * * 4', () => runJob('thu-final',   () => guilds().forEach(g => sendFinalCall(g))),                  { timezone: TIMEZONE });
+  safeCron('45 18 * * 4', () => { if (!shadowsActive()) return; return runJob('thu-core',   () => guilds().forEach(g => sendCoreEarlyAlert(g, 'Thursday'))); }, { timezone: TIMEZONE });
+  safeCron('0 19 * * 4',  () => { if (!shadowsActive()) return; return runJob('thu-warn30', () => guilds().forEach(g => sendWarWarning(g, 'Thursday'))); },     { timezone: TIMEZONE });
+  safeCron('25 19 * * 4', () => { if (!shadowsActive()) return; return runJob('thu-final',  () => guilds().forEach(g => sendFinalCall(g))); },                  { timezone: TIMEZONE });
 
   // ── SATURDAY ──
-  safeCron('45 18 * * 6', () => runJob('sat-core',    () => guilds().forEach(g => sendCoreEarlyAlert(g, 'Saturday'))), { timezone: TIMEZONE });
-  safeCron('0 19 * * 6',  () => runJob('sat-warn30',  () => guilds().forEach(g => sendWarWarning(g, 'Saturday'))),     { timezone: TIMEZONE });
-  safeCron('25 19 * * 6', () => runJob('sat-final',   () => guilds().forEach(g => sendFinalCall(g))),                  { timezone: TIMEZONE });
+  safeCron('45 18 * * 6', () => { if (!shadowsActive()) return; return runJob('sat-core',   () => guilds().forEach(g => sendCoreEarlyAlert(g, 'Saturday'))); }, { timezone: TIMEZONE });
+  safeCron('0 19 * * 6',  () => { if (!shadowsActive()) return; return runJob('sat-warn30', () => guilds().forEach(g => sendWarWarning(g, 'Saturday'))); },     { timezone: TIMEZONE });
+  safeCron('25 19 * * 6', () => { if (!shadowsActive()) return; return runJob('sat-final',  () => guilds().forEach(g => sendFinalCall(g))); },                  { timezone: TIMEZONE });
 
   // Sunday 7:30 PM — Rite of Exile warning
   safeCron('30 19 * * 0', () => {
+    if (!shadowsActive()) return;
     guilds().forEach(guild => {
       const ch = getChannel(guild, CONFIG.shadowWarChannelName);
       if (!ch) return;
@@ -1826,28 +1844,46 @@ function scheduleReminders() {
     });
   }, { timezone: TIMEZONE });
 
-  // Friday 10 AM — Weekly update
+  // Friday 10 AM — Weekly update (faction-aware: Shadows or Immortals).
   safeCron('0 10 * * 5', () => {
+    const state = attendance.getCurrentCycle();
     guilds().forEach(guild => {
       const ch = getChannel(guild, CONFIG.announcementChannelName);
       if (!ch) return;
+      let body;
+      if (state?.faction === 'immortals') {
+        body =
+          `⚡ **Zeus Clan Weekly Reminder — Immortal Reign**\n\n` +
+          `📅 **Schedule (PHT):**\n` +
+          `• 🛡️ Sun 7:55 PM — **Vigil of Blades** (weeks 1–3 of cycle)\n` +
+          `• 🛡️ Mon–Sat 12:00 PM & 7:00 PM — **Vault Defense** (1-hr windows)\n` +
+          `• 🔔 Bot pings 5 min before each Vault window\n\n` +
+          `Grab the **\`@vault\`** role for ping alerts. For Zeus! ⚡`;
+      } else if (state?.faction === 'shadows') {
+        body =
+          `⚡ **Zeus Clan Weekly Reminder — Shadow Reign**\n\n` +
+          `📅 **Schedule (PHT):**\n` +
+          `• Mon 9 AM — Sign-ups open\n` +
+          `• Tue 9 PM — Sign-ups close\n` +
+          `• 🔥 Thu & Sat 6:45 PM — Core early alert\n` +
+          `• ⚔️ Thu & Sat 7:00 PM — 30-min warning\n` +
+          `• 🚨 Thu & Sat 7:25 PM — Final call\n` +
+          `• ⚔️ Thu & Sat 7:30 PM — **SHADOW WAR**\n` +
+          `• 👑 Sun 8:00 PM — Rite of Exile (if qualified)\n` +
+          `• 🛡️ Mon–Sat 12:00 PM & 7:00 PM — **Vault Raid** (1-hr windows)\n\n` +
+          `Use \`$myroles\` to set your ping tier. For Zeus! ⚡`;
+      } else {
+        // No active cycle — skip the weekly update entirely.
+        return;
+      }
       ch.send({ embeds: [zeusEmbed(
         `Weekly Clan Update — ${moment().tz(TIMEZONE).format('MMM DD, YYYY')}`,
-        `⚡ **Zeus Clan Weekly Reminder**\n\n` +
-        `📅 **Schedule (PHT):**\n` +
-        `• Mon 9 AM — Sign-ups open\n` +
-        `• Tue 9 PM — Sign-ups close\n` +
-        `• 🔥 Thu & Sat 6:45 PM — Core early alert\n` +
-        `• ⚔️ Thu & Sat 7:00 PM — 30-min warning\n` +
-        `• 🚨 Thu & Sat 7:25 PM — Final call\n` +
-        `• ⚔️ Thu & Sat 7:30 PM — **SHADOW WAR**\n` +
-        `• 👑 Sun 8:00 PM — Rite of Exile (if qualified)\n\n` +
-        `Use \`$myroles\` to set your ping tier. For Zeus! ⚡`, 0x9B59B6
+        body, 0x9B59B6
       )]});
     });
   }, { timezone: TIMEZONE });
 
-  console.log('✅ All reminders scheduled (tiered: Core 6:45 PM | All 7:00 PM | Final 7:25 PM)');
+  console.log('✅ All reminders scheduled (gated by cycle faction: SW alerts fire only during Shadows cycle)');
 }
 
 // ─── TIERED PING FUNCTIONS ────────────────────────────────────────────────────
