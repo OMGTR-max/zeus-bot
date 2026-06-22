@@ -917,7 +917,7 @@ async function handleLeaderboardCommand(interaction) {
     const off = e.isOfficer ? ' *(officer)*' : '';
     const pct = e.percentage.toFixed(0);
     // MVP race: weighted score (with raw event count as secondary info).
-    // VoB / Shadow War = 10 pts each, Vault = 1 pt.
+    // VoB = 30 pts, Shadow War = 10 pts, Vault = 1 pt.
     return `${medal} **${e.username}** — **${e.score}** pts · ${e.count} events (${pct}%)${off}`;
   });
 
@@ -925,7 +925,7 @@ async function handleLeaderboardCommand(interaction) {
     embeds: [zeusEmbed(
       `Attendance Leaderboard — Week ${attendance.getCycleWeek(state, new Date()) || '—'}`,
       lines.join('\n') +
-      `\n\n*Weighted score: VoB / Shadow War = 10 pts, Vault = 1 pt. Officers excluded from awards.*`
+      `\n\n*Weighted score: VoB = 30 pts, Shadow War = 10 pts, Vault = 1 pt. Officers excluded from awards.*`
     )],
     allowedMentions: { parse: [] },
   });
@@ -992,7 +992,7 @@ async function executeCycleEnd(interaction) {
       `🥇 **Cycle MVP** — ${fmtWinner(winners.mvp)}\n` +
       `🥈 **Storm Bearer** — ${fmtWinner(winners.stormBearer)}\n` +
       `🥉 **Lightning Striker** — ${fmtWinner(winners.lightningStriker)}\n\n` +
-      `*Weighted: VoB / Shadow War = 10 pts, Vault = 1 pt.*\n` +
+      `*Weighted: VoB = 30 pts, Shadow War = 10 pts, Vault = 1 pt.*\n` +
       `Cycle archived. Start the next one with \`/cycle-start\`. ⚡`;
 
     const cfg = attendance.loadConfig();

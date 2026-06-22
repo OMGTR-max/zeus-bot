@@ -64,12 +64,13 @@ function vaultDisplayName(faction) {
 
 // MVP / Storm Bearer / Lightning Striker rank by *weighted* attendance.
 // Raw count is preserved on each entry for "X events attended" display, but
-// the sort key is the weighted score: war events count 10× more than the
-// daily vault grind, so showing up to VoB / Shadow War decides the cycle
-// even when vault grinders have higher raw counts.
+// the sort key is the weighted score. VoB is rare (3 per cycle) so it's
+// weighted heavily — without that, vault grinders would always beat VoB
+// regulars on Immortals cycles (84 vault events × 1 = 84 > 3 VoB × 10 = 30).
+// At 30 pts, 1 VoB ≈ 10 vault credits, so the war event stays the decider.
 const EVENT_WEIGHTS = {
   shadow_war:    10,
-  vob:           10,
+  vob:           30,
   vault_noon:     1,
   vault_evening:  1,
 };
@@ -292,7 +293,7 @@ function computeMaxEvents(state) {
 
 // Weighted maximum used by buildLeaderboard for percentage display and as
 // the implicit "100%" mark for MVP ranking. Shadows perfect = 14×10 (SW) +
-// 3×10 (VoB) + 84×1 (vault) = 254. Immortals perfect = 30 + 84 = 114.
+// 3×30 (VoB) + 84×1 (vault) = 314. Immortals perfect = 3×30 + 84×1 = 174.
 function computeMaxScore(state) {
   if (!state) return 0;
   const vault = (state.durationWeeks || 0) * 6 * 2 * EVENT_WEIGHTS.vault_noon;
