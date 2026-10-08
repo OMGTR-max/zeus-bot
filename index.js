@@ -20,6 +20,7 @@ const path   = require('path');
 const stats      = require('./stats');
 const attendance = require('./attendance');
 const security   = require('./security');
+const raffle     = require('./raffle');
 
 const TIMEZONE = 'Asia/Manila';
 const PREFIX   = '$';
@@ -468,6 +469,9 @@ client.on(Events.InteractionCreate, async interaction => {
     if (interaction.commandName === 'cycle-restore') return handleCycleRestoreCommand(interaction);
     if (interaction.commandName === 'data-debug')   return handleDataDebugCommand(interaction);
     if (interaction.commandName === 'officers')     return handleOfficersCommand(interaction);
+    if (interaction.commandName === 'raffle-start')  return handleRaffleStartCommand(interaction);
+    if (interaction.commandName === 'raffle-cancel') return handleRaffleCancelCommand(interaction);
+    if (interaction.commandName === 'prize-log')     return handlePrizeLogCommand(interaction);
   }
 
   // ── Modal submission (not used in announce anymore, but kept for future) ────
@@ -576,6 +580,49 @@ client.on(Events.InteractionCreate, async interaction => {
         });
       }
       return executeCycleEnd(interaction);
+    }
+    return;
+  }
+
+  // ── Raffle entry button ───────────────────────────────────────────────────
+  if (customId.startsWith('raffle_enter_')) {
+    const raffleId = customId.slice('raffle_enter_'.length);
+    const cycleState = attendance.getCurrentCycle();
+    const result = raffle.enterRaffle(raffleId, user.id, cycleState);
+
+    if (result.ok) {
+      const r = result.raffle;
+      return interaction.reply({
+        content:
+          `🎟️ **You're in!** Entry confirmed for this raffle.\n\n` +
+          `Your standing: **${result.elig.score}** attendance pts · ` +
+          `**${result.elig.voiceHours.toFixed(1)}** voice hrs · ` +
+          `**${result.elig.warEvents}** VoB/SW events\n\n` +
+          `*Everyone who qualifies has equal odds. ${r.entries.length} entrant(s) so far.*`,
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+
+    if (result.reason === 'already_entered') {
+      return interaction.reply({ content: '✅ You already entered this raffle. Good luck! 🎟️', flags: MessageFlags.Ephemeral });
+    }
+    if (result.reason === 'not_found') {
+      return interaction.reply({ content: '❌ This raffle no longer exists.', flags: MessageFlags.Ephemeral });
+    }
+    if (result.reason === 'closed') {
+      return interaction.reply({ content: '⏰ This raffle is already closed.', flags: MessageFlags.Ephemeral });
+    }
+    if (result.reason === 'ineligible') {
+      const noCycle = !cycleState
+        ? '\n\n⚠️ *No cycle is currently active, so no attendance can be counted yet.*'
+        : '';
+      return interaction.reply({
+        content:
+          `🚫 **Not eligible yet.** You still need:\n` +
+          result.elig.missing.map(m => `• ${m}`).join('\n') +
+          `\n\nKeep showing up — join war voice or react 🛡️ on check-ins.${noCycle}`,
+        flags: MessageFlags.Ephemeral,
+      });
     }
     return;
   }
@@ -1361,6 +1408,218 @@ async function handleDataDebugCommand(interaction) {
 }
 
 // ─── /officers — post officer roles as styled embeds ───────────────────────
+// ─── RAFFLES ─────────────────────────────────────────────────────────────────
+// Entry is gated on cycle participation; past the gate odds are flat. Up to
+// three distinct winners (1st/2nd/3rd) are drawn when the timer expires.
+
+function raffleRequirementLines(req) {
+  return [
+    `• **${req.minScore}** attendance pts (VoB 30 · SW 10 · Vault 1)`,
+    `• **${req.minVoiceHours}** hours in Discord voice this cycle`,
+    `• **${req.minWarEvents}** VoB / Shadow War events attended`,
+  ].join('\n');
+}
+
+function buildRaffleEmbed(r, { closed = false } = {}) {
+  const prizeLines = [
+    r.prizes.first  ? `🥇 **1st** — ${r.prizes.first}`  : null,
+    r.prizes.second ? `🥈 **2nd** — ${r.prizes.second}` : null,
+    r.prizes.third  ? `🥉 **3rd** — ${r.prizes.third}`  : null,
+  ].filter(Boolean).join('\n');
+
+  const endsUnix = Math.floor(new Date(r.endsAt).getTime() / 1000);
+  const body =
+    `**Prizes**\n${prizeLines}\n\n` +
+    `**To enter you need**\n${raffleRequirementLines(r.requirements)}\n\n` +
+    (closed
+      ? `**Closed** — ${r.entries.length} entrant(s).`
+      : `⏰ **Closes** <t:${endsUnix}:R> · <t:${endsUnix}:f>\n` +
+        `🎟️ **${r.entries.length}** entrant(s) so far\n\n` +
+        `*Everyone who qualifies has equal odds — showing up gets you in the door, not a bigger slice.*`);
+
+  return zeusEmbed(closed ? '🎟️ Raffle Closed' : '🎟️ Zeus Clan Raffle', body, closed ? 0x95A5A6 : 0xFFD700);
+}
+
+async function handleRaffleStartCommand(interaction) {
+  if (!isAttendanceAdmin(interaction)) {
+    return interaction.reply({ content: '❌ Officer/Admin only.', flags: MessageFlags.Ephemeral });
+  }
+  const o = interaction.options;
+  const durationMs = raffle.parseDuration(o.getString('duration') || '24h');
+  if (!durationMs) {
+    return interaction.reply({
+      content: '❌ Invalid duration. Use e.g. `30m`, `24h`, `7d` (min 1 minute, max 30 days).',
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  const requirements = {
+    minScore:      o.getInteger('min-score')      ?? raffle.DEFAULT_REQUIREMENTS.minScore,
+    minVoiceHours: o.getNumber('min-voice-hours') ?? raffle.DEFAULT_REQUIREMENTS.minVoiceHours,
+    minWarEvents:  o.getInteger('min-war-events') ?? raffle.DEFAULT_REQUIREMENTS.minWarEvents,
+  };
+
+  const r = raffle.createRaffle({
+    guildId:   interaction.guild.id,
+    channelId: interaction.channel.id,
+    createdBy: interaction.user.id,
+    prizes: {
+      first:  o.getString('prize-1st'),
+      second: o.getString('prize-2nd'),
+      third:  o.getString('prize-3rd'),
+    },
+    requirements,
+    durationMs,
+  });
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`raffle_enter_${r.id}`)
+      .setLabel('Enter Raffle')
+      .setEmoji('🎟️')
+      .setStyle(ButtonStyle.Success),
+  );
+
+  await interaction.reply({ embeds: [buildRaffleEmbed(r)], components: [row] });
+  const msg = await interaction.fetchReply();
+  raffle.attachMessage(r.id, msg.id);
+  scheduleRaffleDraw(r.id, durationMs);
+  return msg;
+}
+
+async function handleRaffleCancelCommand(interaction) {
+  if (!isAttendanceAdmin(interaction)) {
+    return interaction.reply({ content: '❌ Officer/Admin only.', flags: MessageFlags.Ephemeral });
+  }
+  const open = raffle.listOpenRaffles();
+  if (open.length === 0) {
+    return interaction.reply({ content: '⚠️ No open raffles to cancel.', flags: MessageFlags.Ephemeral });
+  }
+  // With a single open raffle (the common case) cancel it directly; otherwise
+  // require the id so we never cancel the wrong one.
+  const id = interaction.options.getString('raffle-id') || (open.length === 1 ? open[0].id : null);
+  if (!id) {
+    return interaction.reply({
+      content: `⚠️ Multiple raffles open — pass \`raffle-id\`:\n` +
+        open.map(r => `• \`${r.id}\` — ${r.entries.length} entrant(s)`).join('\n'),
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+  const cancelled = raffle.cancelRaffle(id);
+  if (!cancelled || cancelled.status !== 'cancelled') {
+    return interaction.reply({ content: `❌ Could not cancel \`${id}\` (already drawn or not found).`, flags: MessageFlags.Ephemeral });
+  }
+  return interaction.reply({ content: `✅ Raffle \`${id}\` cancelled. No winners drawn, ${cancelled.entries.length} entry/entries discarded.` });
+}
+
+async function handlePrizeLogCommand(interaction) {
+  if (!isAttendanceAdmin(interaction)) {
+    return interaction.reply({ content: '❌ Officer/Admin only.', flags: MessageFlags.Ephemeral });
+  }
+  const log = raffle.loadPrizeLog().slice(-10).reverse();
+  if (log.length === 0) {
+    return interaction.reply({ content: '📒 No raffles have been drawn yet.', flags: MessageFlags.Ephemeral });
+  }
+  const lines = log.map(entry => {
+    const when = moment(entry.ts).tz(attendance.TIMEZONE).format('MMM DD, YYYY HH:mm');
+    const winners = entry.winners
+      .map(w => `${raffle.PLACE_LABELS[w.place - 1]} <@${w.userId}> — ${w.prize}`)
+      .join('\n  ');
+    return `**${when}** · ${entry.entrants} entrant(s)\n  ${winners}`;
+  });
+  return interaction.reply({
+    embeds: [zeusEmbed('📒 Prize Log — last 10 raffles', lines.join('\n\n'))],
+    flags: MessageFlags.Ephemeral,
+    allowedMentions: { parse: [] },
+  });
+}
+
+// Draw + announce. Safe to call more than once — drawRaffle() is idempotent
+// and we bail if the raffle isn't in 'open' state when we get here.
+async function executeRaffleDraw(raffleId) {
+  const before = raffle.getRaffle(raffleId);
+  if (!before || before.status !== 'open') return;
+
+  const r = raffle.drawRaffle(raffleId);
+  if (!r) return;
+
+  const channel = await client.channels.fetch(r.channelId).catch(() => null);
+
+  if (!r.winners || r.winners.length === 0) {
+    if (channel) {
+      await channel.send({
+        embeds: [zeusEmbed('🎟️ Raffle Closed — No Winners',
+          `No eligible members entered this raffle.\n\n**Requirements were:**\n${raffleRequirementLines(r.requirements)}`,
+          0x95A5A6)],
+      }).catch(() => {});
+    }
+    return;
+  }
+
+  const winnerLines = r.winners
+    .map(w => `${w.placeLabel} — <@${w.userId}>\n└ **${w.prize}**`)
+    .join('\n\n');
+
+  if (channel) {
+    await channel.send({
+      content: r.winners.map(w => `<@${w.userId}>`).join(' '),
+      embeds: [zeusEmbed('🎉 Raffle Winners!',
+        `${winnerLines}\n\n` +
+        `Drawn from **${r.entries.length}** eligible entrant(s) — flat odds.\n\n` +
+        `Contact an officer to claim your prize. ⚡`,
+        0xFFD700)],
+      allowedMentions: { users: r.winners.map(w => w.userId) },
+    }).catch(() => {});
+
+    // Grey out the original embed + drop the Enter button.
+    if (r.messageId) {
+      try {
+        const original = await channel.messages.fetch(r.messageId);
+        await original.edit({ embeds: [buildRaffleEmbed(r, { closed: true })], components: [] });
+      } catch {}
+    }
+  }
+
+  for (const w of r.winners) {
+    try {
+      const u = await client.users.fetch(w.userId);
+      await u.send({ embeds: [zeusEmbed('🎉 You won a Zeus Clan raffle!',
+        `${w.placeLabel} place — **${w.prize}**\n\nContact an officer to claim. ⚡`, 0xFFD700)] });
+    } catch {}
+  }
+}
+
+// node-cron isn't involved here — raffles are one-shot timers. setTimeout
+// caps out around 24.8 days, so anything longer is re-armed in chunks.
+const MAX_TIMEOUT_MS = 2_147_483_647;
+function scheduleRaffleDraw(raffleId, delayMs) {
+  if (delayMs > MAX_TIMEOUT_MS) {
+    setTimeout(() => scheduleRaffleDraw(raffleId, delayMs - MAX_TIMEOUT_MS), MAX_TIMEOUT_MS);
+    return;
+  }
+  setTimeout(() => {
+    executeRaffleDraw(raffleId).catch(e => console.log('[raffle] draw error:', e.message));
+  }, Math.max(0, delayMs));
+}
+
+// On boot, re-arm every open raffle. Anything already past its end time is
+// drawn immediately (the bot was down when the timer should have fired).
+function rearmRaffles() {
+  const open = raffle.listOpenRaffles();
+  const now = Date.now();
+  for (const r of open) {
+    const remaining = new Date(r.endsAt).getTime() - now;
+    if (remaining <= 0) {
+      console.log(`[raffle] ${r.id} overdue — drawing now`);
+      executeRaffleDraw(r.id).catch(e => console.log('[raffle] catchup draw error:', e.message));
+    } else {
+      scheduleRaffleDraw(r.id, remaining);
+    }
+  }
+  if (open.length) console.log(`🎟️ Re-armed ${open.length} open raffle(s)`);
+  try { raffle.pruneOldRaffles(); } catch {}
+}
+
 async function handleOfficersCommand(interaction) {
   const header = new EmbedBuilder()
     .setColor(0xFFD700)
@@ -1575,6 +1834,10 @@ client.once(Events.ClientReady, () => {
   try { attendance.rearmPendingCheckIns(); } catch (e) {
     console.log('[Attendance] rearm error:', e.message);
   }
+  // Re-arm open raffle draw timers; anything already overdue draws now.
+  try { rearmRaffles(); } catch (e) {
+    console.log('[raffle] rearm error:', e.message);
+  }
   // Drop any voice sessions left "open" by the previous process — their
   // joinedAt is no longer trustworthy after a restart.
   try { attendance.clearStaleVoiceSessions(); } catch (e) {
@@ -1741,6 +2004,37 @@ async function registerSlashCommands() {
       new SlashCommandBuilder()
         .setName('data-debug')
         .setDescription('Show what files exist on the persistent volume (officer diagnostic)'),
+
+      // ── /raffle-start — officer-run prize raffle (Officer+) ──────────────
+      new SlashCommandBuilder()
+        .setName('raffle-start')
+        .setDescription('Start a prize raffle gated on cycle participation (Officer+)')
+        .addStringOption(o =>
+          o.setName('prize-1st').setDescription('1st place prize').setRequired(true))
+        .addStringOption(o =>
+          o.setName('prize-2nd').setDescription('2nd place prize (optional)').setRequired(false))
+        .addStringOption(o =>
+          o.setName('prize-3rd').setDescription('3rd place prize (optional)').setRequired(false))
+        .addStringOption(o =>
+          o.setName('duration').setDescription('How long entries stay open — e.g. 30m, 24h, 7d (default 24h)').setRequired(false))
+        .addIntegerOption(o =>
+          o.setName('min-score').setDescription(`Min weighted attendance pts (default ${raffle.DEFAULT_REQUIREMENTS.minScore})`).setRequired(false))
+        .addNumberOption(o =>
+          o.setName('min-voice-hours').setDescription(`Min Discord voice hours this cycle (default ${raffle.DEFAULT_REQUIREMENTS.minVoiceHours})`).setRequired(false))
+        .addIntegerOption(o =>
+          o.setName('min-war-events').setDescription(`Min VoB/Shadow War events (default ${raffle.DEFAULT_REQUIREMENTS.minWarEvents})`).setRequired(false)),
+
+      // ── /raffle-cancel — kill an open raffle without drawing ─────────────
+      new SlashCommandBuilder()
+        .setName('raffle-cancel')
+        .setDescription('Cancel an open raffle without drawing winners (Officer+)')
+        .addStringOption(o =>
+          o.setName('raffle-id').setDescription('Raffle ID (only needed if more than one is open)').setRequired(false)),
+
+      // ── /prize-log — recent raffle winners ───────────────────────────────
+      new SlashCommandBuilder()
+        .setName('prize-log')
+        .setDescription('Show the last 10 raffles and their winners (Officer+)'),
 
       // ── /officers — post officer roles + responsibilities embed ──────────
       new SlashCommandBuilder()
