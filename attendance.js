@@ -303,7 +303,10 @@ function computeMaxScore(state) {
 }
 
 // ─── ATTENDANCE RECORDING ─────────────────────────────────────────────────────
-function recordAttendance(userId, eventKey, eventDate, username = null) {
+// `via` records how the credit was earned — 'react' (clicked 🛡️ on the
+// check-in embed) or 'voice' (joined a war voice channel during the window).
+// Entries written before this field existed simply have no `via`.
+function recordAttendance(userId, eventKey, eventDate, username = null, via = null) {
   const state = loadState();
   if (!state) return false;
   if (!state.attendance[userId]) {
@@ -317,7 +320,9 @@ function recordAttendance(userId, eventKey, eventDate, username = null) {
     e => e.key === eventKey && e.date === eventDate
   );
   if (already) return false;
-  state.attendance[userId].events.push({ key: eventKey, date: eventDate });
+  const entry = { key: eventKey, date: eventDate };
+  if (via) entry.via = via;
+  state.attendance[userId].events.push(entry);
   state.attendance[userId].count++;
   saveState(state);
   return true;
@@ -348,7 +353,7 @@ async function handleVoiceStateUpdate(oldState, newState) {
       // an active event window earns the boolean +1 attendance.
       if (event) {
         const uname = newState.member?.displayName || newState.member?.user?.username || null;
-        const recorded = recordAttendance(userId, event.key, event.eventDate, uname);
+        const recorded = recordAttendance(userId, event.key, event.eventDate, uname, 'voice');
         if (recorded) {
           const tag = newState.member?.user?.tag || userId;
           console.log(`[Attendance] ${tag} credited for ${event.def.name} (joined ${newCh.name})`);
@@ -507,7 +512,7 @@ async function handleCheckInReaction(reaction, user) {
 
     const member = reaction.message.guild?.members?.cache?.get(user.id);
     const uname = member?.displayName || user.username || null;
-    recordAttendance(user.id, checkIn.eventKey, checkIn.eventDate, uname);
+    recordAttendance(user.id, checkIn.eventKey, checkIn.eventDate, uname, 'react');
   } catch (e) {
     console.log('[Attendance] reaction handler error:', e.message);
   }
@@ -839,6 +844,9 @@ module.exports = {
   getEngagementReport,
   clearStaleVoiceSessions,
   ENGAGEMENT_WEIGHTS,
+  EVENT_WEIGHTS,
+  computeWeightedScore,
+  computeMaxScore,
   DRIVE_BY_THRESHOLD_MIN,
   listBackups,
   loadBackup,
